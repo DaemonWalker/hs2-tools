@@ -1,0 +1,136 @@
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-size: cover;
+  user-select: none;
+  height: 100vh;
+  width: 100vw;
+  padding: 0px;
+  margin: 0px;
+}
+
+#root {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  flex-direction: column;
+}
+
+#header {
+  /* height: 100px; */
+}
+
+#container {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  box-sizing: border-box;
+  min-height: 0;
+}
+
+.chara-card {
+  flex: 1;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  gap: 10px;
+}
+
+.chara-card-list-container {
+  flex: 3;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chara-card-mod-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+}
+
+.chara-card-chara-info {
+  min-height: 0;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+}
+
+.scene-card {
+  flex: 1;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  gap: 10px;
+}
+
+.scene-card-left {
+  min-height: 0;
+  flex:3;
+  display: flex;
+  flex-direction: column;
+}
+
+.scene-card-mods {
+  flex: 2;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+}
+
+.home {
+  display: flex;
+  flex-direction: column;
+}
+
+.home-setting {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.local-mods {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.local-mods-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+}
+
+.local-mods-header {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+}
+
+.png-thumbnail {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+}
+.png-thumbnail-header {
+  align-items: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  padding: 10px;
+}
