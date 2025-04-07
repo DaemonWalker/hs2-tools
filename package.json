@@ -25,6 +25,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@types/xml2js": "^0.4.14",
     "antd": "^5.24.6",
+    "cheerio": "^1.0.0",
     "electron-dl": "^4.0.0",
     "electron-updater": "^6.3.9",
     "node-stream-zip": "^1.15.0",

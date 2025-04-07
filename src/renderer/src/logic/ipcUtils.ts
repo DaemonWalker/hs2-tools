@@ -1,6 +1,8 @@
-import { ModModel } from '@renderer/store/modStore'
+import { useSettingStore } from '@renderer/store/settingStore'
 import { EXE_NAME } from '@shared/constants'
+import { DownloadModel } from '@shared/models/downloadModel'
 import { Options } from '@shared/models/getFileOptions'
+import { ModModel } from '@shared/models/modModel'
 
 export const readDir = (dirPath: string): Promise<string[]> =>
   window.electron.ipcRenderer.invoke('readDir', dirPath)
@@ -53,5 +55,17 @@ export const openFileSelector = (): Promise<string | undefined> =>
 
 export const getCardMods = (path: string): Promise<string[] | undefined> =>
   window.electron.ipcRenderer.invoke('readPngForMod', path)
+
+const link =
+  'https://dl.vxload.com/file/31/ab85fee24706fee1/%5B3D%5D%E6%A2%A6%E7%96%AF.rar?s=ELfeZYGvwWnDpQRRkBaEb3PXA3s7jaMHc9Itibp0MVIP1AeT0FDOnqhn9Fus8_4hxkMNZZ269VhC6vVuAbpPBQ3Y1d0LPPdubqiAHM_LbtFC9Rw8gc5yRvl6YxQcO6AV&ts=1743856570114'
+
+export const triggerDownload = (url, name) => {
+  const path = useSettingStore.getState().modsPath()!
+  const info: DownloadModel = { url: link, dir: path, name }
+  return window.electron.ipcRenderer.invoke('triggerDownload', info)
+}
+
+export const initSideload = (url?: string) =>
+  window.electron.ipcRenderer.invoke('initSideload', url)
 
 export const log = (...data: any[]) => window.electron.ipcRenderer.invoke('log', data)

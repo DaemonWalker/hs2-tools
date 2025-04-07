@@ -6,7 +6,8 @@ import {
   UserOutlined,
   BookOutlined,
   BackwardOutlined,
-  SearchOutlined
+  SearchOutlined,
+  DownloadOutlined
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
@@ -55,6 +56,12 @@ export const Header: React.FC = () => {
           key: 'explorer',
           icon: <SearchOutlined />,
           onClick: () => navigate('/explorer')
+        },
+        {
+          label: '下载',
+          key: 'download',
+          icon: <DownloadOutlined />,
+          onClick: () => navigate('/download')
         }
       ]}
     ></Menu>

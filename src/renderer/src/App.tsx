@@ -8,9 +8,9 @@ import { FemaleChara } from './pages/FemaleChara'
 import { Scenes } from './pages/Scenes'
 import { SceneGroup } from './components/scene/SceneGroup'
 import { CardExplorer } from './pages/CardExplorer'
+import { Download } from './pages/Download'
 
 function App(): JSX.Element {
-  const {}=useDownload
   return (
     <>
       <AppInitialization />
@@ -22,6 +22,7 @@ function App(): JSX.Element {
           <Route path="/scene-group/*" element={<SceneGroup />} />
           <Route path="/mods/*" element={<Mods />} />
           <Route path="/explorer" element={<CardExplorer />} />
+          <Route path="/download" element={<Download />} />
           <Route path="/" element={<Home />} />
         </Routes>
       </div>

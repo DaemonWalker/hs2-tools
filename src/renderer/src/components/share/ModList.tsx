@@ -2,6 +2,7 @@ import { FC, useEffect, useMemo, useState } from 'react'
 import { List, Typography } from 'antd'
 import { useModStore } from '@renderer/store/modStore'
 import { getCardMods } from '@renderer/logic/ipcUtils'
+import { DownloadButton } from './DownloadButton'
 
 interface IState {
   filePath: string
@@ -35,7 +36,11 @@ export const ModList: FC<IState> = ({ filePath }) => {
           <div style={{ width: '100%', display: 'flex' }}>
             <div style={{ flex: 1 }}>{item.name}</div>
             <div>
-              {item.isLocal ? <Text style={{ color: 'green' }}>已在本地</Text> : <Link>下载</Link>}
+              {item.isLocal ? (
+                <Text style={{ color: 'green' }}>已在本地</Text>
+              ) : (
+                <DownloadButton modName={item.name} />
+              )}
             </div>
           </div>
         </List.Item>

@@ -1,11 +1,12 @@
+import { DownloadingInfo, DownloadModel, DownloadTaskInfo } from '@shared/models/downloadModel'
 import { create } from 'zustand'
 
 interface DownloadState {
-  tasks: Record<string, { progress: number; status: string; speed: string }>
-  setTasks: (tasks: Record<string, { progress: number; status: string; speed: string }>) => void
+  tasks: DownloadingInfo
+  setTask: (tasks: DownloadingInfo) => void
 }
 
-create<DownloadState>((set) => ({
+export const useDownloadStore = create<DownloadState>((set) => ({
   tasks: {},
-  setTasks: (tasks) => set((state) => ({ tasks: { ...state.tasks, ...tasks } }))
+  setTask: (tasks) => set((state) => ({ tasks: { ...state.tasks, ...tasks } }))
 }))

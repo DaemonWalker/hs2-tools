@@ -1,8 +1,10 @@
+import { SideloadModel } from '@shared/models/sideloadModel'
+
 let db: IDBDatabase | null = null
 
 const openDB = (dbName: string, ...storeNames: string[]): Promise<void> => {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(dbName, 1)
+    const request = indexedDB.open(dbName, storeNames.length)
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result
       for (const storeName of storeNames) {
@@ -88,7 +90,7 @@ const clearStore = (storeName: string): Promise<void> => {
 }
 
 export const initDB = () =>
-  openDB('modDB', SETTINGS_STORE_NAME, SCENE_STORE_NAME, LOCAL_MODS_STORE_NAME)
+  openDB('modDB', SETTINGS_STORE_NAME, SCENE_STORE_NAME, LOCAL_MODS_STORE_NAME, SIDELOAD_STORE_NAME)
 
 export const closeDB = () => {
   if (db) {
@@ -125,4 +127,14 @@ export const getLocalMods = () => {
 export const saveLocalMods = async (data: any) => {
   await clearStore(LOCAL_MODS_STORE_NAME)
   await insert(LOCAL_MODS_STORE_NAME, data)
+}
+
+const SIDELOAD_STORE_NAME = 'sideload'
+export const getSideload = () => {
+  return get(SIDELOAD_STORE_NAME)
+}
+
+export const saveSideload = async (data: SideloadModel) => {
+  await clearStore(SIDELOAD_STORE_NAME)
+  await insert(SIDELOAD_STORE_NAME, data)
 }

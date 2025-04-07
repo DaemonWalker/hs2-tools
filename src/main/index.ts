@@ -4,9 +4,19 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import fs from 'fs'
 import { loadLocalMods, loadSettings, saveLocalMods, saveSettings } from './saveData'
-import { checkTargetDir, fileExists, listAllFiles, moveFile, readAllCharaNames, readAllMods, readPngForShow } from './fileUtil'
+import {
+  checkTargetDir,
+  fileExists,
+  listAllFiles,
+  moveFile,
+  readAllCharaNames,
+  readAllMods,
+  readPngForShow
+} from './fileUtil'
 import { readZipMod } from './zipUtil'
-import electronDl from 'electron-dl'
+// import electronDl from 'electron-dl'
+import { download } from './downloadUtil'
+import { getAllModsAsync } from './betterrepackUtil'
 
 function createWindow(): void {
   // Create the browser window.
@@ -21,7 +31,14 @@ function createWindow(): void {
       sandbox: false
     }
   })
-  electronDl();
+
+  process.on('unhandledRejection', (reason) => {
+    console.log('未处理的 Promise 拒绝:', reason)
+  })
+
+  process.on('uncaughtException', (error) => {
+    console.log('未捕获的异常:', error)
+  })
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
@@ -86,6 +103,8 @@ app.whenReady().then(() => {
       })
       .then((res) => (res.canceled ? undefined : res.filePaths[0]))
   )
+  ipcMain.handle('triggerDownload', (_, info) => download(info))
+  ipcMain.handle('initSideload', (_, url) => getAllModsAsync(url).catch((e) => console.log(e)))
   ipcMain.handle('log', (_, data) => console.log(...data))
 
   createWindow()
