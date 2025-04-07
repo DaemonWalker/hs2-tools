@@ -15,8 +15,7 @@ import {
 } from './fileUtil'
 import { readZipMod } from './zipUtil'
 // import electronDl from 'electron-dl'
-import { download } from './downloadUtil'
-import { getAllModsAsync } from './betterrepackUtil'
+import { download, getAllModsAsync } from './betterrepackUtil'
 
 function createWindow(): void {
   // Create the browser window.

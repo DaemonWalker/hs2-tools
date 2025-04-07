@@ -2,7 +2,7 @@ export interface DownloadModel {
   url: string
   proxy?: string
   dir: string
-  name: string
+  guid: string
 }
 
 export interface DownloadTaskInfo {
@@ -13,3 +13,5 @@ export interface DownloadTaskInfo {
 }
 
 export type DownloadingInfo = { [id: string]: DownloadTaskInfo }
+
+export type DownloadCompleteInfo = Pick<File, 'path'> & Pick<DownloadModel, 'guid'>

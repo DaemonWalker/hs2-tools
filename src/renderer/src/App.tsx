@@ -20,7 +20,7 @@ function App(): JSX.Element {
           <Route path="/character/*" element={<FemaleChara />} />
           <Route path="/scene/*" element={<Scenes />} />
           <Route path="/scene-group/*" element={<SceneGroup />} />
-          <Route path="/mods/*" element={<Mods />} />
+          <Route path="/mods-local/*" element={<Mods />} />
           <Route path="/explorer" element={<CardExplorer />} />
           <Route path="/download" element={<Download />} />
           <Route path="/" element={<Home />} />

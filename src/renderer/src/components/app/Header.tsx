@@ -22,10 +22,14 @@ export const Header: React.FC = () => {
         { label: '后退', key: 'back', icon: <BackwardOutlined />, onClick: () => navigate(-1) },
         { label: '首页', key: 'home', icon: <HomeOutlined />, onClick: () => navigate('/') },
         {
-          label: '本地模组',
+          label: '模组',
           key: 'localMods',
           icon: <AppstoreOutlined />,
-          onClick: () => navigate('/mods')
+          children:[
+            { label: '本地模组', key: 'list', onClick: () => navigate('/mods-local/') },
+            { label: 'BatterRepack', key: 'info', onClick: () => navigate('/mods-sideload/') }
+          ]
+          
         },
         {
           label: '人物',
