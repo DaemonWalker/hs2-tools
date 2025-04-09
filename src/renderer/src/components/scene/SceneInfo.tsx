@@ -1,7 +1,8 @@
-import { getCardCharaNames } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { Divider, List, Space, Typography } from 'antd'
 import { FC, useEffect, useMemo, useState } from 'react'
 
+const { readAllCharaNames } = ipcUtils
 const { Text } = Typography
 
 interface IState {
@@ -17,7 +18,7 @@ export const SceneInfo: FC<IState> = ({ filePath }) => {
     return undefined
   }, [info])
   useEffect(() => {
-    getCardCharaNames(filePath).then((data) => setInfo(data))
+    readAllCharaNames(filePath).then((data) => setInfo(data))
   }, [filePath])
   return (
     <List

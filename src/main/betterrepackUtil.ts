@@ -74,7 +74,7 @@ const findGuid = async (url: string, size: number): Promise<string | undefined> 
   return guid.toString('utf-8')
 }
 
-const getModGuid = async (url: string): Promise<SideloadModel> => {
+const getModGuid = async (url: string, baseUrl: string): Promise<SideloadModel> => {
   const res = await fetch(url, {
     method: 'HEAD',
     headers: {
@@ -90,18 +90,17 @@ const getModGuid = async (url: string): Promise<SideloadModel> => {
   }
   const size = parseInt(contentLength)
   const guid = await findGuid(url, size)
-  return guid ? { [guid]: url } : {}
+  return guid ? { [guid]: url.replace(baseUrl, '') } : {}
 }
 
-export const getAllModsAsync = async (url: string) => {
-  const baseUrl = url ?? 'https://sideload.betterrepack.com/download/AISHS2/'
+export const getAllMods = async (url: string): Promise<SideloadModel> => {
   const win = BrowserWindow.getFocusedWindow()
   if (!win) {
-    return
+    return {}
   }
 
   let result = {}
-  const queue: string[][] = [[baseUrl, '']]
+  const queue: string[][] = [[url, '']]
   while (queue.length > 0) {
     const fetchUrl = queue.shift()!.join('')
     win.webContents.send('get-all-mods', `${fetchUrl} 剩余:${queue.length}`)
@@ -124,7 +123,7 @@ export const getAllModsAsync = async (url: string) => {
     const zipmods = urls.filter((u) => u.endsWith('.zipmod'))
     const zipmodTasks = await Promise.all(
       zipmods.map((mod) =>
-        getModGuid(fetchUrl + mod).catch((e) => {
+        getModGuid(fetchUrl + mod, url).catch((e) => {
           console.log(e)
         })
       )
@@ -144,7 +143,7 @@ export const download = async (info: DownloadModel) => {
   }
   try {
     const id = Date.now()
-    win.webContents.session.setProxy({ proxyRules: info.proxy || '' })
+    // win.webContents.session.setProxy({ proxyRules: info.proxy || '' })
     const item = await dl(win, info.url, {
       directory: info.dir,
       onProgress: (e) => {

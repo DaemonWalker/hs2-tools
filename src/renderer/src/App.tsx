@@ -9,6 +9,7 @@ import { Scenes } from './pages/Scenes'
 import { SceneGroup } from './components/scene/SceneGroup'
 import { CardExplorer } from './pages/CardExplorer'
 import { Download } from './pages/Download'
+import { SystemSettings } from './pages/SystemSettings'
 
 function App(): JSX.Element {
   return (
@@ -21,8 +22,9 @@ function App(): JSX.Element {
           <Route path="/scene/*" element={<Scenes />} />
           <Route path="/scene-group/*" element={<SceneGroup />} />
           <Route path="/mods-local/*" element={<Mods />} />
-          <Route path="/explorer" element={<CardExplorer />} />
-          <Route path="/download" element={<Download />} />
+          <Route path="/explorer/*" element={<CardExplorer />} />
+          <Route path="/download/*" element={<Download />} />
+          <Route path="/settings/*" element={<SystemSettings />} />
           <Route path="/" element={<Home />} />
         </Routes>
       </div>

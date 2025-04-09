@@ -1,8 +1,10 @@
-import { selectPath } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { useSettingStore } from '@renderer/store/settingStore'
 import { Button, Input, Space } from 'antd'
 import { FC, useState } from 'react'
 // import { dialog } from 'electron'
+
+const { selectPath } = ipcUtils
 
 export const Settings: FC = () => {
   const { settings, setPath } = useSettingStore()

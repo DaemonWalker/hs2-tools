@@ -1,7 +1,8 @@
-import { readPngForShow } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { Spin } from 'antd'
 import { CSSProperties, FC, useEffect, useState } from 'react'
 
+const { readPngForShow } = ipcUtils
 interface IState {
   filePath: string
   style?: CSSProperties

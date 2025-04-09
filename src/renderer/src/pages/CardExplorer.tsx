@@ -1,9 +1,10 @@
 import { CharaDetail } from '@renderer/components/character/CharaDetail'
 import { SceneDetail } from '@renderer/components/scene/SceneDetail'
-import { fileExists, openFileSelector } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { Button, Input, Radio } from 'antd'
 import { FC, useEffect, useState } from 'react'
 
+const { fileExists, openFileSelector } = ipcUtils
 export const CardExplorer: FC = () => {
   const [type, setType] = useState<'chara' | 'scene'>('chara')
   const [path, setPath] = useState('')

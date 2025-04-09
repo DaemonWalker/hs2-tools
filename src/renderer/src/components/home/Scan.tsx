@@ -1,5 +1,5 @@
 import { pathJoin } from '@renderer/logic/ioUtils'
-import { getAllFiles, getCardMods, getZipModInfo } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { useModStore } from '@renderer/store/modStore'
 import { useSettingStore } from '@renderer/store/settingStore'
 import { Button } from 'antd'
@@ -7,6 +7,8 @@ import { FC, useMemo, useState } from 'react'
 import { RunningProgress } from '../share/RunningProgress'
 import { ProgressInfo } from '@shared/models/progressInfo'
 import { ModModel } from '@shared/models/modModel'
+
+const { getAllFiles, readPngForMod, readZipMod } = ipcUtils
 
 export const Scan: FC = () => {
   const { modsPath, scenePath, charaFemalePath } = useSettingStore()
@@ -42,7 +44,7 @@ export const Scan: FC = () => {
     const result: ModModel = {}
     for (let i = 0; i < allLocalMods.length; i++) {
       const mod = allLocalMods[i]
-      const zipInfo = await getZipModInfo(mod)
+      const zipInfo = await readZipMod(mod)
       if (zipInfo) {
         const guid = Object.keys(zipInfo)[0]
         result[guid] = { ...zipInfo[guid]!, path: mod }
@@ -60,7 +62,7 @@ export const Scan: FC = () => {
     setCurrent(3)
     for (let i = 0; i < scene.length; i++) {
       const chara = scene[i]
-      const mods = await getCardMods(chara)
+      const mods = await readPngForMod(chara)
       if (mods) {
         for (const mod of mods) {
           result[mod]
@@ -82,7 +84,7 @@ export const Scan: FC = () => {
     setCurrent(5)
     for (let i = 0; i < charas.length; i++) {
       const chara = charas[i]
-      const mods = await getCardMods(chara)
+      const mods = await readPngForMod(chara)
       if (mods) {
         for (const mod of mods) {
           if (result[mod]) {

@@ -2,20 +2,8 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import fs from 'fs'
-import { loadLocalMods, loadSettings, saveLocalMods, saveSettings } from './saveData'
-import {
-  checkTargetDir,
-  fileExists,
-  listAllFiles,
-  moveFile,
-  readAllCharaNames,
-  readAllMods,
-  readPngForShow
-} from './fileUtil'
-import { readZipMod } from './zipUtil'
-// import electronDl from 'electron-dl'
-import { download, getAllModsAsync } from './betterrepackUtil'
+import { bindHandler } from './ipcHandler'
+import { ProxyAgent, setGlobalDispatcher } from 'undici'
 
 function createWindow(): void {
   // Create the browser window.
@@ -72,39 +60,7 @@ app.whenReady().then(() => {
   })
 
   // IPC test
-  ipcMain.handle('ping', () => console.log('pong'))
-  ipcMain.handle('readDir', (_, path) => fs.readdirSync(path))
-  ipcMain.handle('readPngForMod', (_, path) => readAllMods(path))
-  ipcMain.handle('readAllCharaNames', (_, path) => readAllCharaNames(path))
-  ipcMain.handle('readPngForShow', (_, path) => readPngForShow(path))
-  ipcMain.handle('selectPath', () =>
-    dialog
-      .showOpenDialog({
-        filters: [{ name: 'HoneySelect2.exe', extensions: ['exe'] }],
-        properties: ['openFile']
-      })
-      .then((res) => (res.canceled ? undefined : res.filePaths[0]))
-  )
-  ipcMain.handle('loadSettings', () => loadSettings())
-  ipcMain.handle('saveSettings', (_, setting) => saveSettings(setting))
-  ipcMain.handle('loadLocalMods', () => loadLocalMods())
-  ipcMain.handle('saveLocalMods', (_, mods) => saveLocalMods(mods))
-  ipcMain.handle('getAllFiles', (_, path, options) => listAllFiles(path, options))
-  ipcMain.handle('readZipMod', (_, path) => readZipMod(path))
-  ipcMain.handle('moveFile', (_, files, target) => moveFile(files, target))
-  ipcMain.handle('checkTargetDir', (_, target) => checkTargetDir(target))
-  ipcMain.handle('fileExists', (_, path) => fileExists(path))
-  ipcMain.handle('openFileSelector', () =>
-    dialog
-      .showOpenDialog({
-        filters: [{ name: '*.png', extensions: ['png'] }],
-        properties: ['openFile']
-      })
-      .then((res) => (res.canceled ? undefined : res.filePaths[0]))
-  )
-  ipcMain.handle('triggerDownload', (_, info) => download(info))
-  ipcMain.handle('initSideload', (_, url) => getAllModsAsync(url).catch((e) => console.log(e)))
-  ipcMain.handle('log', (_, data) => console.log(...data))
+  bindHandler(ipcMain)
 
   createWindow()
 

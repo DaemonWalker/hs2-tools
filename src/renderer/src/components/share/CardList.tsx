@@ -1,10 +1,10 @@
-import { pathJoin } from '@renderer/logic/ioUtils'
-import { getAllFiles } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { useSettingStore } from '@renderer/store/settingStore'
 import { Divider, Pagination, PaginationProps } from 'antd'
 import { FC, useEffect, useMemo, useState } from 'react'
-import InfiniteScroll from 'react-infinite-scroll-component'
 import { ResponsiveContainer } from './ResponsiveContainer'
+
+const { getAllFiles } = ipcUtils
 
 interface IProps {
   columnCount: number

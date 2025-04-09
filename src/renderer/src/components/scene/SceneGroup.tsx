@@ -1,10 +1,11 @@
 import React, { LegacyRef, useRef, useState } from 'react'
 import { Button, Input, InputRef, Progress, Steps } from 'antd'
-import { checkTargetDir, getAllFiles, moveFile, getCardCharaNames } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { useSettingStore } from '@renderer/store/settingStore'
 import { pathJoin } from '@renderer/logic/ioUtils'
 
 const { TextArea } = Input
+const { getAllFiles, readAllCharaNames, checkTargetDir, moveFile } = ipcUtils
 
 export const SceneGroup: React.FC = () => {
   const { scenePath } = useSettingStore()
@@ -39,7 +40,7 @@ export const SceneGroup: React.FC = () => {
       setTotal(scenes.length)
       for (let i = 0; i < scenes.length; i++) {
         const scene = scenes[i]
-        const names = await getCardCharaNames(scene)
+        const names = await readAllCharaNames(scene)
         if (!names) {
           continue
         }

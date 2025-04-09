@@ -7,7 +7,8 @@ import {
   BookOutlined,
   BackwardOutlined,
   SearchOutlined,
-  DownloadOutlined
+  DownloadOutlined,
+  SettingOutlined
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
@@ -25,11 +26,10 @@ export const Header: React.FC = () => {
           label: '模组',
           key: 'localMods',
           icon: <AppstoreOutlined />,
-          children:[
+          children: [
             { label: '本地模组', key: 'list', onClick: () => navigate('/mods-local/') },
             { label: 'BatterRepack', key: 'info', onClick: () => navigate('/mods-sideload/') }
           ]
-          
         },
         {
           label: '人物',
@@ -66,6 +66,12 @@ export const Header: React.FC = () => {
           key: 'download',
           icon: <DownloadOutlined />,
           onClick: () => navigate('/download')
+        },
+        {
+          label: '设置',
+          key: 'settings',
+          icon: <SettingOutlined />,
+          onClick: () => navigate('/settings')
         }
       ]}
     ></Menu>

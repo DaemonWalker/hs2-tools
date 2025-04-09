@@ -1,20 +1,21 @@
 import { FC, useEffect, useMemo, useState } from 'react'
 import { List, Typography } from 'antd'
 import { useModStore } from '@renderer/store/modStore'
-import { getCardMods } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { DownloadButton } from './DownloadButton'
 
+const { readPngForMod } = ipcUtils
 interface IState {
   filePath: string
 }
 
-const { Text, Link } = Typography
+const { Text } = Typography
 
 export const ModList: FC<IState> = ({ filePath }) => {
   const [mods, setMods] = useState<string[] | undefined>(undefined)
   const { mods: localMods } = useModStore()
   useEffect(() => {
-    getCardMods(filePath).then((data) => {
+    readPngForMod(filePath).then((data) => {
       setMods(data)
     })
   }, [filePath])

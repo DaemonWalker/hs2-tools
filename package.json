@@ -31,6 +31,7 @@
     "node-stream-zip": "^1.15.0",
     "react-infinite-scroll-component": "^6.1.0",
     "react-router-dom": "^7.4.1",
+    "undici": "^7.7.0",
     "xml2js": "^0.6.2",
     "zustand": "^5.0.3"
   },

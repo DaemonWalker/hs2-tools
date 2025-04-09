@@ -1,7 +1,9 @@
-import { getCardCharaNames } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { FC, useEffect, useState } from 'react'
 import { PngViewer } from '../share/PngViewer'
 import { useNavigate } from 'react-router-dom'
+
+const { readAllCharaNames } = ipcUtils
 
 interface IProps {
   filePath: string
@@ -10,7 +12,7 @@ interface IProps {
 export const CharaThumbnail: FC<IProps> = ({ filePath }) => {
   const [info, setInfo] = useState<(string | undefined)[]>()
   useEffect(() => {
-    getCardCharaNames(filePath).then((data) => setInfo(data))
+    readAllCharaNames(filePath).then((data) => setInfo(data))
   }, [])
   const navi = useNavigate()
   return (

@@ -2,9 +2,10 @@ import { useModStore } from '@renderer/store/modStore'
 import { useSideloadStore } from '@renderer/store/sideloadStore'
 import { FC, useMemo, useState } from 'react'
 import { Button, Typography } from 'antd'
-import { triggerDownload } from '@renderer/logic/ipcUtils'
+import ipcUtils from '@renderer/logic/ipcUtils'
 import { useDownloadStore } from '@renderer/store/downloadStore'
 
+const { triggerDownload } = ipcUtils
 const { Text } = Typography
 
 interface IProps {
