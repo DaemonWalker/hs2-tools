@@ -16,7 +16,7 @@ export const CardExplorer: FC = () => {
     openFileSelector().then((path) => (path ? setPath(path) : null))
   }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 10 }}>
         <Radio.Group onChange={(e) => setType(e.target.value)} defaultValue={type}>
           <Radio.Button value="chara">人物卡</Radio.Button>

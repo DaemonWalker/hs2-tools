@@ -6,15 +6,10 @@ import { FC, useState } from 'react'
 const { initSideload } = ipcUtils
 
 export const SideloadInit: FC = () => {
-  const { current, setMap } = useSideloadStore()
-  const [running, setRunning] = useState<boolean>(false)
-  const init = async () => {
+  const { current,  running, setRunning } = useSideloadStore()
+  const init = () => {
     setRunning(true)
-    const result = await initSideload('https://sideload.betterrepack.com/download/AISHS2/')
-    if (result) {
-      setMap(result)
-    }
-    setRunning(false)
+    initSideload('https://sideload.betterrepack.com/download/AISHS2/')
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

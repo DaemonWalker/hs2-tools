@@ -9,16 +9,32 @@ import { FC, useEffect } from 'react'
 
 const { readZipMod, setProxy, disableWindowsSleep, enableWindowsSleep } = ipcUtils
 
-export const AppInitialization: FC = () => {
+const SideLoadInit: FC = () => {
+  const { setCurrent, setMap, setRunning } = useSideloadStore()
+  useEffect(() => {
+    window.bridge.onSideloadInitFinish((obj) => {
+      if (obj) {
+        setMap(obj)
+      }
+      setRunning(false)
+    })
+    window.bridge.onSideloadInitProgress((url) => {
+      setCurrent(url)
+    })
+  }, [])
+
+  return <></>
+}
+
+export const BackgroundComponent: FC = () => {
   const { setTask } = useDownloadStore()
-  const { setCurrent } = useSideloadStore()
   const { settings } = useSettingStore()
 
   useEffect(() => {
-    window.electron.onDownloadProgress((progress: DownloadingInfo) => {
+    window.bridge.onDownloadProgress((progress: DownloadingInfo) => {
       setTask(progress)
     })
-    window.electron.onDownloadComplete(async (info: DownloadCompleteInfo) => {
+    window.bridge.onDownloadComplete(async (info: DownloadCompleteInfo) => {
       const modInfo = await readZipMod(info.path)
       if (!modInfo) {
         return
@@ -27,9 +43,7 @@ export const AppInitialization: FC = () => {
       mods[info.guid] = modInfo[info.guid]
       useModStore.getState().setMods(mods)
     })
-    window.electron.getAllMods((url) => {
-      setCurrent(url)
-    })
+
     initDB().then(() => {
       useSettingStore.getState().init()
       useModStore.getState().init()
@@ -49,5 +63,9 @@ export const AppInitialization: FC = () => {
       enableWindowsSleep(settings.windowsSleep.taskId)
     }
   }, [settings.windowsSleep])
-  return <></>
+  return (
+    <>
+      <SideLoadInit />
+    </>
+  )
 }

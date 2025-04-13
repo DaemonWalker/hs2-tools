@@ -2,7 +2,7 @@ import { Route, Routes } from 'react-router-dom'
 import '../src/assets/main.css'
 import { Header } from './components/app/Header'
 import { Home } from './pages/Home'
-import { AppInitialization } from './components/app/AppInitialization'
+import { BackgroundComponent } from './components/app/BackgroundComponent'
 import { Mods } from './pages/Mods'
 import { FemaleChara } from './pages/FemaleChara'
 import { Scenes } from './pages/Scenes'
@@ -14,7 +14,7 @@ import { SystemSettings } from './pages/SystemSettings'
 function App(): JSX.Element {
   return (
     <>
-      <AppInitialization />
+      <BackgroundComponent />
       <Header />
       <div id="container">
         <Routes>

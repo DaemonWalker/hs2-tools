@@ -1,3 +1,4 @@
+import { ModUseageModel } from '@shared/models/modModel'
 import { SideloadModel } from '@shared/models/sideloadModel'
 
 let db: IDBDatabase | null = null
@@ -90,7 +91,14 @@ const clearStore = (storeName: string): Promise<void> => {
 }
 
 export const initDB = () =>
-  openDB('modDB', SETTINGS_STORE_NAME, SCENE_STORE_NAME, LOCAL_MODS_STORE_NAME, SIDELOAD_STORE_NAME)
+  openDB(
+    'modDB',
+    SETTINGS_STORE_NAME,
+    SCENE_STORE_NAME,
+    LOCAL_MODS_STORE_NAME,
+    SIDELOAD_STORE_NAME,
+    MOD_USEAGE_STORE_NAME
+  )
 
 export const closeDB = () => {
   if (db) {
@@ -137,4 +145,14 @@ export const getSideload = () => {
 export const saveSideload = async (data: SideloadModel) => {
   await clearStore(SIDELOAD_STORE_NAME)
   await insert(SIDELOAD_STORE_NAME, data)
+}
+
+const MOD_USEAGE_STORE_NAME = 'modUseage'
+export const getModUseage = () => {
+  return get(MOD_USEAGE_STORE_NAME)
+}
+
+export const saveModUseage = async (useage: ModUseageModel) => {
+  await clearStore(MOD_USEAGE_STORE_NAME)
+  await insert(MOD_USEAGE_STORE_NAME, useage)
 }

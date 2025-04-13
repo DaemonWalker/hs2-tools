@@ -11,11 +11,38 @@ const FETCH_SIZE = 1024
 const MAX_PART_FETCH = 5
 
 const downloadTasks: Record<string, Electron.DownloadItem> = {}
+type RetryFetchInit = RequestInit & { maxRetries?: number }
+
+const fetchWithRetry = async (
+  url: string,
+  options?: RetryFetchInit
+): Promise<Response | undefined> => {
+  const maxRetries = options?.maxRetries ?? 3
+  let retries = 0
+  while (true) {
+    try {
+      const response = await fetch(url, { ...options })
+      if (response.ok) {
+        return response
+      }
+      console.log(`request failed, status code: ${response.status}`)
+    } catch (error) {
+      console.log(`request failed: ${error}`)
+    }
+    retries++
+    if (retries >= maxRetries) {
+      break
+    }
+    // 简单的指数退避策略，每次重试等待时间翻倍
+    await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, retries)))
+  }
+  return undefined
+}
 
 const checkBuffer = (buffer: Buffer) => buffer.includes(GUID_START) && buffer.includes(GUID_END)
 
 const fetchRange = async (url: string, start: number, end: number) => {
-  const fileResponse = await fetch(url, {
+  const fileResponse = await fetchWithRetry(url, {
     method: 'GET',
     headers: {
       'user-agent':
@@ -26,8 +53,7 @@ const fetchRange = async (url: string, start: number, end: number) => {
       host: 'sideload.betterrepack.com'
     }
   })
-  if (!fileResponse.ok) {
-    console.log(`Error: ${fileResponse.status}`, url)
+  if (!fileResponse) {
     return undefined
   }
   return Buffer.from(await fileResponse.arrayBuffer())
@@ -75,7 +101,7 @@ const findGuid = async (url: string, size: number): Promise<string | undefined> 
 }
 
 const getModGuid = async (url: string, baseUrl: string): Promise<SideloadModel> => {
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: 'HEAD',
     headers: {
       'user-agent':
@@ -84,6 +110,9 @@ const getModGuid = async (url: string, baseUrl: string): Promise<SideloadModel> 
       'accept-encoding': 'identity'
     }
   })
+  if (!res) {
+    return {}
+  }
   const contentLength = res.headers.get('content-length')
   if (!contentLength) {
     return {}
@@ -105,9 +134,8 @@ export const getAllMods = async (url: string): Promise<SideloadModel> => {
     const fetchUrl = queue.shift()!.join('')
     win.webContents.send('get-all-mods', `${fetchUrl} 剩余:${queue.length}`)
 
-    const response = await fetch(fetchUrl)
-    if (!response.ok) {
-      console.log(`Error: ${response.status} ${response.statusText}`)
+    const response = await fetchWithRetry(fetchUrl)
+    if (!response) {
       continue
     }
 

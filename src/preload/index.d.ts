@@ -1,13 +1,10 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import { DownloadingInfo } from '@shared/models/downloadModel'
-
+import { bridgeHandlers } from './index'
 declare global {
   interface Window {
-    electron: ElectronAPI & {
-      onDownloadProgress: (callback: (args: DownloadingInfo) => void) => void
-      onDownloadComplete: (callback: (args: DownloadCompleteInfo) => void) => void
-      getAllMods: (callback: (args: string) => void) => void
-    }
+    electron: ElectronAPI
+    bridge: typeof bridgeHandlers
     api: unknown
   }
 }

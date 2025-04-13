@@ -24,10 +24,10 @@ export const Header: React.FC = () => {
         { label: '首页', key: 'home', icon: <HomeOutlined />, onClick: () => navigate('/') },
         {
           label: '模组',
-          key: 'localMods',
+          key: 'mods',
           icon: <AppstoreOutlined />,
           children: [
-            { label: '本地模组', key: 'list', onClick: () => navigate('/mods-local/') },
+            { label: '本地模组', key: 'localMods', onClick: () => navigate('/mods-local/') },
             { label: 'BatterRepack', key: 'info', onClick: () => navigate('/mods-sideload/') }
           ]
         },
@@ -42,7 +42,7 @@ export const Header: React.FC = () => {
           key: 'scene',
           icon: <BookOutlined />,
           children: [
-            { label: '场景列表', key: 'list', onClick: () => navigate('/scene') },
+            { label: '场景列表', key: 'sceneList', onClick: () => navigate('/scene') },
             {
               label: '场景整理',
               key: 'group',
