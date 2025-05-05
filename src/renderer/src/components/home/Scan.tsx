@@ -25,19 +25,20 @@ export const Scan: FC = () => {
     ],
     [info]
   )
+  const increaseCurrent = () => setCurrent(current + 1)
 
   const scan = async () => {
     setScanning(true)
     const mods = await scanMods(
-      () => setCurrent(current + 1),
+      increaseCurrent,
       (t) => setInfo({ ...info, mod: t })
     )
     const scene = await scanScene(
-      () => setCurrent(current + 1),
+      increaseCurrent,
       (t) => setInfo({ ...info, scene: t })
     )
     const female = await scanFemale(
-      () => setCurrent(current + 1),
+      increaseCurrent,
       (t) => setInfo({ ...info, chara: t })
     )
 

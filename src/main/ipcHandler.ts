@@ -11,7 +11,7 @@ import {
 } from './fileUtil'
 import { loadLocalMods, loadSettings, saveLocalMods, saveSettings } from './saveData'
 import { readZipMod } from './zipUtil'
-import { download, getAllMods } from './betterrepackUtil'
+import { download, getBatterRepackInfo } from './betterrepackUtil'
 import { ProxyAgent, setGlobalDispatcher } from 'undici'
 import { ProxyInfo } from '@shared/models/proxyInfo'
 
@@ -45,8 +45,8 @@ export const ipcHandler = {
           properties: ['openFile']
         })
         .then((res) => (res.canceled ? undefined : res.filePaths[0])),
-    triggerDownload: (_, info) => download(info),
-    initSideload: (_, url) => getAllMods(url).catch((e) => console.log(e)),
+    triggerDownload: (_, info) => download({ ...info, url: 'https://sideload.betterrepack.com/download/AISHS2/' + info.url }),
+    initSideload: (_) => getBatterRepackInfo(),
     disableWindowsSleep: (_) => powerSaveBlocker.start('prevent-app-suspension'),
     enableWindowsSleep: (_, id) => powerSaveBlocker.stop(id),
     setProxy: (_, proxy: ProxyInfo) => {

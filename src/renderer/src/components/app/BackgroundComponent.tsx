@@ -9,22 +9,6 @@ import { FC, useEffect } from 'react'
 
 const { readZipMod, setProxy, disableWindowsSleep, enableWindowsSleep } = ipcUtils
 
-const SideLoadInit: FC = () => {
-  const { setCurrent, setMap, setRunning } = useSideloadStore()
-  useEffect(() => {
-    window.bridge.onSideloadInitFinish((obj) => {
-      if (obj) {
-        setMap(obj)
-      }
-      setRunning(false)
-    })
-    window.bridge.onSideloadInitProgress((url) => {
-      setCurrent(url)
-    })
-  }, [])
-
-  return <></>
-}
 
 export const BackgroundComponent: FC = () => {
   const { setTask } = useDownloadStore()
@@ -65,7 +49,6 @@ export const BackgroundComponent: FC = () => {
   }, [settings.windowsSleep])
   return (
     <>
-      <SideLoadInit />
     </>
   )
 }

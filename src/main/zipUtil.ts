@@ -23,8 +23,7 @@ export const readZipMod = async (path: string): Promise<ModModel | undefined> =>
             [obj['guid'] as string]: {
               name,
               version: obj['version'] as string,
-              path: path as string,
-              used: 0
+              path: path as string
             }
           })
         }

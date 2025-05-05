@@ -16,64 +16,67 @@ import { useNavigate } from 'react-router-dom'
 export const Header: React.FC = () => {
   const navigate = useNavigate()
   return (
-    <Menu
-      mode="horizontal"
-      style={{ width: '100%' }}
-      items={[
-        { label: '后退', key: 'back', icon: <BackwardOutlined />, onClick: () => navigate(-1) },
-        { label: '首页', key: 'home', icon: <HomeOutlined />, onClick: () => navigate('/') },
-        {
-          label: '模组',
-          key: 'mods',
-          icon: <AppstoreOutlined />,
-          children: [
-            { label: '本地模组', key: 'localMods', onClick: () => navigate('/mods-local/') },
-            { label: 'BatterRepack', key: 'info', onClick: () => navigate('/mods-sideload/') }
-          ]
-        },
-        {
-          label: '人物',
-          key: 'chara',
-          icon: <UserOutlined />,
-          onClick: () => navigate('/character')
-        },
-        {
-          label: '场景',
-          key: 'scene',
-          icon: <BookOutlined />,
-          children: [
-            { label: '场景列表', key: 'sceneList', onClick: () => navigate('/scene') },
-            {
-              label: '场景整理',
-              key: 'group',
-              onClick: () => navigate('/scene-group')
-            },
-            {
-              label: '场景统计',
-              key: 'statistics',
-              onClick: () => navigate('/scene-statistics')
-            }
-          ]
-        },
-        {
-          label: '查看',
-          key: 'explorer',
-          icon: <SearchOutlined />,
-          onClick: () => navigate('/explorer')
-        },
-        {
-          label: '下载',
-          key: 'download',
-          icon: <DownloadOutlined />,
-          onClick: () => navigate('/download')
-        },
-        {
-          label: '设置',
-          key: 'settings',
-          icon: <SettingOutlined />,
-          onClick: () => navigate('/settings')
-        }
-      ]}
-    ></Menu>
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%' }}>
+      <Menu
+        mode="horizontal"
+        style={{ width: '100%' }}
+        items={[
+          { label: '后退', key: 'back', icon: <BackwardOutlined />, onClick: () => navigate(-1) },
+          { label: '首页', key: 'home', icon: <HomeOutlined />, onClick: () => navigate('/') },
+          {
+            label: '模组',
+            key: 'mods',
+            icon: <AppstoreOutlined />,
+            children: [
+              { label: '本地模组', key: 'localMods', onClick: () => navigate('/mods-local/') },
+              { label: 'BatterRepack', key: 'info', onClick: () => navigate('/mods-sideload/') }
+            ]
+          },
+          {
+            label: '人物',
+            key: 'chara',
+            icon: <UserOutlined />,
+            onClick: () => navigate('/character')
+          },
+          {
+            label: '场景',
+            key: 'scene',
+            icon: <BookOutlined />,
+            children: [
+              { label: '场景列表', key: 'sceneList', onClick: () => navigate('/scene') },
+              {
+                label: '场景整理',
+                key: 'group',
+                onClick: () => navigate('/scene-group')
+              },
+              {
+                label: '场景统计',
+                key: 'statistics',
+                onClick: () => navigate('/scene-statistics')
+              }
+            ]
+          },
+          {
+            label: '查看',
+            key: 'explorer',
+            icon: <SearchOutlined />,
+            onClick: () => navigate('/explorer')
+          },
+          {
+            label: '下载',
+            key: 'download',
+            icon: <DownloadOutlined />,
+            onClick: () => navigate('/download')
+          },
+          {
+            label: '设置',
+            key: 'settings',
+            icon: <SettingOutlined />,
+            onClick: () => navigate('/settings')
+          }
+        ]}
+      ></Menu>
+      <div style={{ flex: 1 }}>1234</div>
+    </div>
   )
 }

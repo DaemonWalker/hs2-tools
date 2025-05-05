@@ -49,7 +49,7 @@ const ipcHandler: IPCHandlerModel = {
       dir: useSettingStore.getState().modsPath()!
     })
   },
-  initSideload: (url?: string) => window.electron.ipcRenderer.invoke('initSideload', url),
+  initSideload: () => window.electron.ipcRenderer.invoke('initSideload'),
   log: (...data: any[]) => window.electron.ipcRenderer.invoke('log', data),
   ping: () => window.electron.ipcRenderer.invoke('ping'),
   disableWindowsSleep: () => window.electron.ipcRenderer.invoke('enableWindowsSleep'),

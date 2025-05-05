@@ -1,4 +1,4 @@
-import { getLocalMods, saveLocalMods, saveModUseage } from '@renderer/logic/dbUtils'
+import { getLocalMods, getModUseage, saveLocalMods, saveModUseage } from '@renderer/logic/dbUtils'
 import { ModModel, ModUseageModel } from '@shared/models/modModel'
 import { create } from 'zustand'
 
@@ -17,7 +17,8 @@ export const useModStore = create<ModState>((set) => ({
   useage: {},
   init: async () => {
     const mods = await getLocalMods()
-    set(() => ({ mods }))
+    const useage = await getModUseage()
+    set(() => ({ mods, useage }))
   },
   setMods: async (mods) => {
     await saveLocalMods(mods)

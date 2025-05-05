@@ -26,9 +26,9 @@ export const useSettingStore = create<SettingState>((set, get) => ({
     await saveSettings(settings)
     set(() => ({ settings }))
   },
-  scenePath: () => pathJoin(get().settings.path!, SCENE_PATH),
-  charaFemalePath: () => pathJoin(get().settings.path!, CHARA_FEMALE_PATH),
-  modsPath: () => pathJoin(get().settings.path!, MODS_PATH),
+  scenePath: () => get().settings.path + SCENE_PATH,
+  charaFemalePath: () => get().settings.path + CHARA_FEMALE_PATH,
+  modsPath: () => get().settings.path + MODS_PATH,
   setSettingForm: async (form) => {
     const settings = { ...get().settings, ...form }
     await saveSettings(settings)

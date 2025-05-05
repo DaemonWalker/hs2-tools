@@ -138,14 +138,6 @@ export const saveLocalMods = async (data: any) => {
 }
 
 const SIDELOAD_STORE_NAME = 'sideload'
-export const getSideload = () => {
-  return get(SIDELOAD_STORE_NAME)
-}
-
-export const saveSideload = async (data: SideloadModel) => {
-  await clearStore(SIDELOAD_STORE_NAME)
-  await insert(SIDELOAD_STORE_NAME, data)
-}
 
 const MOD_USEAGE_STORE_NAME = 'modUseage'
 export const getModUseage = () => {
