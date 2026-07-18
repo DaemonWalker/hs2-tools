@@ -1,0 +1,89 @@
+/* ==================== 设计 Tokens v2.0 ==================== */
+/* 新配色：琥珀金/深紫对比，避免 AI 紫蓝渐变 */
+
+:root {
+  /* === 状态色 - 跨主题保持一致 === */
+  --color-success: #22c55e;
+  --color-success-bg: #f0fdf4;
+  --color-success-border: #bbf7d0;
+  
+  --color-error: #ef4444;
+  --color-error-bg: #fef2f2;
+  --color-error-border: #fecaca;
+  
+  --color-warning: #f59e0b;
+  --color-warning-bg: #fffbeb;
+  --color-warning-border: #fde68a;
+  
+  --color-info: #3b82f6;
+  --color-info-bg: #eff6ff;
+  --color-info-border: #bfdbfe;
+  
+  /* === 中性色 === */
+  --color-gray-100: #f5f5f5;
+  --color-gray-200: #e5e5e5;
+  --color-gray-300: #d4d4d4;
+  --color-gray-400: #a3a3a3;
+  --color-gray-500: #737373;
+  --color-gray-600: #525252;
+  --color-gray-700: #404040;
+  --color-gray-800: #262626;
+  --color-gray-900: #171717;
+}
+
+/* === 赛博紫夜主题 - 琥珀金/深紫 === */
+[data-theme='modern-dark'] {
+  /* 主色调 - 温暖的琥珀金 */
+  --primary-color: #f59e0b;
+  --primary-hover: #fbbf24;
+  --primary-dark: #d97706;
+  --theme-primary: var(--primary-color);
+  
+  /* 强调色 - 深紫对比 */
+  --accent-color: #7c3aed;
+  --accent-light: #a78bfa;
+  --accent-dark: #5b21b6;
+  --theme-primary-light: var(--accent-light);
+  --theme-primary-dark: var(--accent-dark);
+  
+  /* 背景色 */
+  --bg-primary: #09090b;
+  --bg-secondary: #18181b;
+  --bg-tertiary: #27272a;
+  --bg-elevated: #3f3f46;
+  
+  /* 文字色 */
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  
+  /* 边框 */
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(245, 158, 11, 0.3);
+}
+
+/* === 简洁专业主题 - 清新蓝 === */
+[data-theme='clean-light'] {
+  --primary-color: #0ea5e9;
+  --primary-hover: #38bdf8;
+  --primary-dark: #0284c7;
+  --theme-primary: var(--primary-color);
+  
+  --accent-color: #6366f1;
+  --accent-light: #818cf8;
+  --accent-dark: #4f46e5;
+  --theme-primary-light: var(--accent-light);
+  --theme-primary-dark: var(--accent-dark);
+  
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f1f5f9;
+  --bg-elevated: #e2e8f0;
+  
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  
+  --border-color: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(14, 165, 233, 0.3);
+}

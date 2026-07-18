@@ -1,6 +1,117 @@
+# ============================================
+# Dependencies
+# ============================================
 node_modules
+vendor/
+
+# ============================================
+# Build outputs
+# ============================================
 dist
 out
-.DS_Store
+build
+!wails/build/
+!wails/build/**
+tmp
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ============================================
+# Go specific
+# ============================================
+wails/bin/
+*.test
+*.out
+coverage.out
+coverage.html
+
+# ============================================
+# IDE / Editors
+# ============================================
+.idea
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+*.iml
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ============================================
+# Logs
+# ============================================
+*.log
+logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# ============================================
+# Environment files
+# ============================================
+.env
+.env.local
+.env.*.local
+
+# ============================================
+# Cache
+# ============================================
 .eslintcache
-*.log*
+.stylelintcache
+.parcel-cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+.cache
+*.tsbuildinfo
+
+# ============================================
+# Testing
+# ============================================
+coverage
+.nyc_output
+
+# ============================================
+# OS generated files
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================
+# Package managers
+# ============================================
+.yarn-integrity
+.pnp.*
+.npm
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# ============================================
+# Misc
+# ============================================
+*.local
+*.bak
+*.orig
+*.rej
+
+# Wails build output
+wails/build/bin/

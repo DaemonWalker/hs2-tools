@@ -1,0 +1,799 @@
+/* ==================== Tailwind Directives ==================== */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==================== 导入主题 ==================== */
+@import url('./tokens.css');
+@import url('./themes/modern-dark.css');
+@import url('./themes/clean-light.css');
+@import url('./drawer.css');
+
+/* ==================== 基础样式重置 ==================== */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background-size: cover;
+  user-select: none;
+  height: 100vh;
+  width: 100vw;
+  padding: 0px;
+  margin: 0px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  flex-direction: column;
+}
+
+#header {
+  /* height: 100px; */
+}
+
+/* 导航栏高度 - 确保菜单文字和图标完整显示 */
+.app-header {
+  height: 48px;
+  min-height: 48px;
+}
+
+.app-header .ant-menu {
+  height: 48px;
+  line-height: 46px;
+}
+
+.app-header .ant-menu-item {
+  height: 46px;
+  line-height: 46px;
+  display: flex !important;
+  align-items: center !important;
+}
+
+/* 防止图标被截断 */
+.app-header .ant-menu-item .anticon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 16px;
+  margin-right: 6px;
+  overflow: visible !important;
+}
+
+#container {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  box-sizing: border-box;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ==================== 角色卡片布局 ==================== */
+.chara-card {
+  flex: 1;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  gap: 16px;
+}
+
+.chara-card-list-container {
+  flex: 3;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chara-card-mod-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  border-radius: 8px;
+}
+
+.chara-card-chara-info {
+  min-height: 0;
+  border-radius: 8px;
+}
+
+/* ==================== 场景卡片布局 ==================== */
+.scene-card {
+  flex: 1;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  gap: 16px;
+}
+
+.scene-card-left {
+  min-height: 0;
+  flex:3;
+  display: flex;
+  flex-direction: column;
+}
+
+.scene-card-mods {
+  flex: 2;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 8px;
+}
+
+/* ==================== 首页布局 ==================== */
+.home {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.home-setting {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+/* ==================== 本地模组布局 ==================== */
+.local-mods {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.local-mods-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  border-radius: 8px;
+}
+
+.local-mods-header {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+}
+
+/* ==================== 缩略图基础样式 ==================== */
+.png-thumbnail {
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.png-thumbnail-header {
+  align-items: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  padding: 10px;
+}
+
+/* ==================== 图片查看器 ==================== */
+.png-viewer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.png-viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* ==================== 响应式布局 ==================== */
+@media (max-width: 768px) {
+  #container {
+    padding: 12px;
+  }
+}
+
+/* ==================== 动画 ==================== */
+/* Optimized animations with will-change and reduced motion support */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease forwards;
+  will-change: opacity, transform;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.3s ease forwards;
+  will-change: opacity, transform;
+}
+
+.animate-pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* ==================== 工具类（保留被使用的） ==================== */
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ==================== Ant Design 覆盖 ==================== */
+.ant-menu-submenu-popup {
+  max-height: 80vh;
+  overflow: auto;
+}
+
+/* 确保菜单文字可见 */
+.ant-menu-title-content {
+  color: inherit;
+}
+
+/* 下拉菜单样式 */
+.ant-dropdown-menu {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+/* 工具提示 */
+.ant-tooltip-inner {
+  font-size: 12px;
+}
+
+/* 空状态 */
+.ant-empty-description {
+  opacity: 0.7;
+}
+
+/* ==================== 场景浏览器 - 右侧抽屉布局 ==================== */
+
+/* 主容器 */
+.scene-explorer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-primary, #fff);
+}
+
+/* 主内容区域 */
+.explorer-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 整理容器 */
+.organizer-container {
+  flex: 1;
+  overflow: hidden;
+  padding: var(--spacing-md);
+}
+
+/* ==================== 场景整理器 ==================== */
+
+.scene-organizer {
+  display: flex;
+  height: 100%;
+  gap: var(--spacing-lg);
+  overflow: hidden;
+}
+
+/* 侧边栏 */
+.organizer-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  overflow-y: auto;
+  padding-right: var(--spacing-sm);
+}
+
+.organizer-card {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+}
+
+.organizer-card .ant-card-head {
+  background: transparent;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.organizer-card .ant-card-body {
+  padding: var(--spacing-md);
+}
+
+/* 主区域 */
+.organizer-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-md);
+}
+
+/* 操作栏 */
+.organizer-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-md);
+  padding-bottom: var(--spacing-sm);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* 任务列表 */
+.organizer-task-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.organizer-task-list .ant-list-item {
+  padding: var(--spacing-sm) 0;
+  border-bottom: none;
+}
+
+.organizer-task-item {
+  transition: all 0.2s ease;
+}
+
+.organizer-task-item.active .task-card {
+  border-color: var(--theme-primary);
+  box-shadow: 0 0 0 2px var(--theme-primary-light);
+}
+
+.task-card {
+  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
+
+.task-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.task-card .ant-card-head {
+  background: transparent;
+  padding: var(--spacing-sm) var(--spacing-md);
+  min-height: 44px;
+}
+
+.task-card .ant-card-body {
+  padding: var(--spacing-md);
+}
+
+/* 响应式调整 */
+@media (max-width: 900px) {
+  .scene-organizer {
+    flex-direction: column;
+  }
+
+  .organizer-sidebar {
+    width: 100%;
+    max-height: 40%;
+  }
+
+  .organizer-main {
+    max-height: 60%;
+  }
+}
+
+/* 右侧抽屉样式 */
+.scene-detail-drawer .ant-drawer-content-wrapper {
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.15);
+}
+
+/* 抽屉内容纵向布局 */
+.scene-drawer-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 16px;
+  padding: 16px;
+}
+
+.scene-drawer-section {
+  flex-shrink: 0;
+}
+
+.scene-drawer-image {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.scene-drawer-info {
+  flex-shrink: 0;
+}
+
+.scene-drawer-mods {
+  flex: 1;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 场景卡片横向比例（覆盖默认） */
+.scene-explorer .card-item .png-thumbnail img {
+  aspect-ratio: 16/9;
+}
+
+/* ==================== 角色浏览器 - 横向抽屉布局 ==================== */
+
+/* 主容器 */
+.chara-explorer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-primary, #fff);
+}
+
+/* 顶部工具栏 */
+.explorer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color, #e8e8e8);
+  background: var(--bg-primary, #fff);
+  flex-shrink: 0;
+}
+
+.toolbar-left {
+  flex: 1;
+}
+
+.toolbar-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.toolbar-center {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.toolbar-right {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 网格列表容器 */
+.explorer-grid-container {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px;
+}
+
+/* 卡片网格 */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  overflow: visible;
+  flex: 1;
+  padding: 12px 0;
+  align-content: start;
+  contain: layout paint;
+}
+
+/* 卡片项 */
+.card-item {
+  position: relative;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  background: var(--bg-secondary, #fafafa);
+}
+
+/* Optimized hover effect - use GPU-accelerated transform only */
+.card-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  will-change: transform;
+}
+
+.card-item:hover .card-favorite-btn {
+  opacity: 1 !important;
+}
+
+.card-item.selected {
+  box-shadow: 0 0 0 2px var(--theme-primary);
+}
+
+.card-item.selected .png-thumbnail {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* 收藏按钮 */
+.card-favorite-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+
+/* Optimized hover effect for favorite button */
+.card-favorite-btn:hover {
+  background: transparent;
+  transform: scale(1.1);
+  will-change: transform;
+}
+
+/* 卡片状态栏 */
+.card-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ==================== 可访问性增强 ==================== */
+
+/* 收藏按钮重置为 button 元素样式 */
+.card-favorite-btn {
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+}
+
+/* 键盘聚焦样式 - 使用 focus-visible 仅在键盘导航时显示 */
+.card-item:focus-visible,
+.png-thumbnail:focus-visible {
+  outline: 2px solid var(--theme-primary);
+  outline-offset: 2px;
+}
+
+.card-favorite-btn:focus-visible {
+  outline: 2px solid var(--theme-primary);
+  outline-offset: 2px;
+  opacity: 1 !important;
+}
+
+/* 确保所有可交互元素有可见的聚焦状态 */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid var(--theme-primary);
+  outline-offset: 2px;
+}
+
+/* 减少动画 - 尊重用户的系统偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-fadeIn,
+  .animate-slideIn,
+  .animate-pulse {
+    animation: none !important;
+  }
+
+  .card-item:hover,
+  .png-thumbnail:hover {
+    transform: none !important;
+  }
+}
+
+/* ==================== 高对比度模式支持 ==================== */
+
+@media (prefers-contrast: high) {
+  .card-item:focus-visible,
+  .png-thumbnail:focus-visible,
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 3px solid currentColor;
+    outline-offset: 2px;
+  }
+
+  .card-item.selected {
+    box-shadow: 0 0 0 3px currentColor;
+  }
+}
+
+/* ==================== 打印样式 ==================== */
+
+@media print {
+  .app-header,
+  .card-favorite-btn,
+  .explorer-toolbar,
+  button {
+    display: none !important;
+  }
+
+  #container {
+    overflow: visible;
+    height: auto;
+  }
+
+  .card-grid {
+    display: block;
+  }
+
+  .card-item {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-bottom: 16px;
+  }
+}
+
+/* ==================== 暗色/亮色模式图标适配 ==================== */
+
+/* 确保图标在任何背景下都可见 */
+[data-theme='modern-dark'] .card-favorite-btn,
+[data-theme='clean-light'] .card-favorite-btn {
+  background: transparent;
+}
+
+/* ==================== 加载状态优化 ==================== */
+
+/* 防止加载时的布局偏移 - 角色卡片 */
+.card-item .png-thumbnail {
+  min-height: 200px;
+}
+
+/* 场景卡片使用横向比例，调整最小高度 */
+.scene-explorer .card-item .png-thumbnail {
+  min-height: auto;
+}
+
+/* 场景卡片图片紧凑显示 */
+.scene-explorer .card-item .png-thumbnail img {
+  display: block;
+  width: 100%;
+}
+
+/* 场景卡片容器高度自适应 */
+.scene-explorer .card-item {
+  height: auto;
+}
+
+/* 骨架屏动画 */
+@keyframes skeleton {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-secondary) 25%,
+    var(--bg-tertiary) 50%,
+    var(--bg-secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton 1.5s ease-in-out infinite;
+}
+
+/* ==================== 下载管理页面 Tabs 样式 ==================== */
+/* 让 Tabs 内容区域占满剩余高度 */
+.ant-tabs.download-tabs {
+  display: flex;
+  flex-direction: column;
+}
+
+.ant-tabs.download-tabs > .ant-tabs-nav {
+  margin-bottom: 0;
+  padding: 8px 16px 0;
+  background-color: var(--ant-color-bg-container);
+  border-bottom: 1px solid var(--ant-color-border);
+}
+
+.ant-tabs.download-tabs > .ant-tabs-content-holder {
+  flex: 1;
+  overflow: hidden;
+  background-color: var(--ant-color-bg-container);
+}
+
+.ant-tabs.download-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+  height: 100%;
+}
+
+.ant-tabs.download-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+  height: 100%;
+}
+
+/* Tab 标签样式优化 */
+.ant-tabs.download-tabs .ant-tabs-tab {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.ant-tabs.download-tabs .ant-tabs-tab-active {
+  font-weight: 500;
+}
