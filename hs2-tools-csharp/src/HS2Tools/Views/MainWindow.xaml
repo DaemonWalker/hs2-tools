@@ -1,0 +1,67 @@
+<Window x:Class="HS2Tools.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="HS2 Tools" Width="960" Height="640"
+        Background="{DynamicResource WindowBackgroundBrush}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="HS2 Tools" FontSize="28" FontWeight="Bold"
+                   Foreground="{DynamicResource ForegroundBrush}"/>
+
+        <!-- 游戏路径设置卡片 -->
+        <Border Grid.Row="1" Margin="0,16,0,16" Padding="16" CornerRadius="8"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+            <StackPanel>
+                <TextBlock Text="游戏路径" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{DynamicResource ForegroundBrush}"/>
+                <Grid Margin="0,8,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Text="{Binding GamePath, UpdateSourceTrigger=PropertyChanged}"
+                             Padding="6,4" VerticalContentAlignment="Center"/>
+                    <Button Grid.Column="1" Content="浏览…" Margin="8,0,0,0" Padding="16,4"
+                            Command="{Binding BrowseCommand}"/>
+                </Grid>
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Width="10" Height="10" Margin="0,0,6,0">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="{DynamicResource ErrorBrush}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsGamePathValid}" Value="True">
+                                        <Setter Property="Fill" Value="{DynamicResource SuccessBrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock Text="{Binding PathStatusText}"
+                               Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 页面导航 -->
+        <UniformGrid Grid.Row="2" Columns="3">
+            <Button Content="角色卡浏览" Margin="8" Padding="12" Click="NavChara_Click"/>
+            <Button Content="场景库" Margin="8" Padding="12" Click="NavScene_Click"/>
+            <Button Content="单卡查看" Margin="8" Padding="12" Click="NavCardExplorer_Click"/>
+            <Button Content="本地模组" Margin="8" Padding="12" Click="NavMods_Click"/>
+            <Button Content="BetterRepack" Margin="8" Padding="12" Click="NavSideload_Click"/>
+            <Button Content="下载任务" Margin="8" Padding="12" Click="NavDownload_Click"/>
+            <Button Content="系统设置" Margin="8" Padding="12" Click="NavSettings_Click"/>
+        </UniformGrid>
+
+        <TextBlock Grid.Row="3" Text="阶段 2 应用骨架：页面可导航，功能在阶段 3 实现"
+                   Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+    </Grid>
+</Window>

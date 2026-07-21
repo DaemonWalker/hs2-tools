@@ -1,0 +1,12 @@
+using System.Windows;
+
+namespace HS2Tools.Views;
+
+/// <summary>角色卡浏览（占位，阶段 3 实现）</summary>
+public partial class CharaWindow : Window
+{
+    public CharaWindow()
+    {
+        InitializeComponent();
+    }
+}
