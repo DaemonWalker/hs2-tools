@@ -2,13 +2,12 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Wails Dev",
-      "type": "node",
+      "name": "Run HS2Tools (WPF)",
+      "type": "coreclr",
       "request": "launch",
-      "cwd": "${workspaceFolder}/wails",
-      "runtimeExecutable": "wails",
-      "args": ["dev"],
-      "console": "integratedTerminal"
+      "program": "${workspaceFolder}/hs2-tools-csharp/src/HS2Tools/bin/Debug/net8.0-windows/HS2Tools.exe",
+      "cwd": "${workspaceFolder}/hs2-tools-csharp/src/HS2Tools",
+      "preLaunchTask": "dotnet build"
     }
   ]
 }
