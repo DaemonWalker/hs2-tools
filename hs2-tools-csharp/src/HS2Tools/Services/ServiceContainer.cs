@@ -14,6 +14,7 @@ public class ServiceContainer : IDisposable
         Scanner = new ScannerService();
         Downloads = new DownloadManager(Config.GetProxyString);
         GameLauncher = new GameLauncherService(Config);
+        SideloadDb = new SideloadDatabaseService(Config.ConfigDir);
         Windows = new WindowManager();
     }
 
@@ -21,13 +22,14 @@ public class ServiceContainer : IDisposable
     public ScannerService Scanner { get; }
     public DownloadManager Downloads { get; }
     public GameLauncherService GameLauncher { get; }
+    public SideloadDatabaseService SideloadDb { get; }
     public WindowManager Windows { get; }
 
     /// <summary>
     /// 每次运行爬虫创建新实例（对应原版 RunSideloader 时 NewSideloader(proxy)），
     /// 代理设置即时生效。
     /// </summary>
-    public SideloaderService CreateSideloader() => new(Config.GetProxyString());
+    public ISideloaderService CreateSideloader() => new SideloaderService(Config.GetProxyString());
 
     public void Dispose() => Config.Dispose();
 }

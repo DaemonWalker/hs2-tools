@@ -13,6 +13,7 @@
     <Color x:Key="BorderColor">#FFDCDCDC</Color>
     <Color x:Key="SuccessColor">#FF107C10</Color>
     <Color x:Key="ErrorColor">#FFD13438</Color>
+    <Color x:Key="WarningColor">#FFF7630C</Color>
 
     <SolidColorBrush x:Key="WindowBackgroundBrush" Color="{StaticResource WindowBackgroundColor}"/>
     <SolidColorBrush x:Key="ForegroundBrush" Color="{StaticResource ForegroundColor}"/>
@@ -22,4 +23,5 @@
     <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}"/>
     <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}"/>
     <SolidColorBrush x:Key="ErrorBrush" Color="{StaticResource ErrorColor}"/>
+    <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningColor}"/>
 </ResourceDictionary>

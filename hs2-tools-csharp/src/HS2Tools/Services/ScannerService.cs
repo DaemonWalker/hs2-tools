@@ -34,8 +34,9 @@ public class ScannerService
         {
             attrs = File.GetAttributes(dir);
         }
-        catch
+        catch (Exception ex)
         {
+            ErrorLog.Log($"ScanDirectory root inaccessible: {dir}: {ex.Message}");
             return files; // 根路径无法访问 → 空结果（Go Walk 返回 nil 错误）
         }
 
@@ -64,8 +65,9 @@ public class ScannerService
         {
             entries = Directory.EnumerateFileSystemEntries(dir);
         }
-        catch
+        catch (Exception ex)
         {
+            ErrorLog.Log($"ScanDirectory skip unreadable dir: {dir}: {ex.Message}");
             return; // 目录不可读 → 跳过（Go walkFn 返回 nil）
         }
 
@@ -77,8 +79,9 @@ public class ScannerService
             {
                 attrs = File.GetAttributes(entry);
             }
-            catch
+            catch (Exception ex)
             {
+                ErrorLog.Log($"ScanDirectory skip entry: {entry}: {ex.Message}");
                 continue; // 条目无法访问 → 跳过
             }
 

@@ -14,11 +14,14 @@ public class DownloadManager
 
     private readonly ConcurrentDictionary<string, DownloadTask> _tasks = new();
     private readonly Func<string?> _proxyProvider;
+    private readonly string _baseUrl;
 
     /// <param name="proxyProvider">代理串提供者（通常为 ConfigService.GetProxyString），每次启动下载时取值</param>
-    public DownloadManager(Func<string?>? proxyProvider = null)
+    /// <param name="baseUrl">下载基础 URL（测试可注入本地服务器；生产用默认）</param>
+    public DownloadManager(Func<string?>? proxyProvider = null, string? baseUrl = null)
     {
         _proxyProvider = proxyProvider ?? (() => null);
+        _baseUrl = baseUrl ?? BaseUrl;
     }
 
     /// <summary>新任务已加入</summary>
@@ -44,7 +47,7 @@ public class DownloadManager
         var task = new DownloadTask
         {
             Id = name,
-            Url = BaseUrl + relativeUrl,
+            Url = _baseUrl + relativeUrl,
             OutputPath = Path.Combine(dir, name + ".zipmod"),
             Status = DownloadTaskStatus.Downloading,
             Cts = new CancellationTokenSource(),
@@ -138,6 +141,7 @@ public class DownloadManager
         {
             task.Status = DownloadTaskStatus.Failed;
             task.ErrorMessage = ex.Message;
+            ErrorLog.Log($"Download failed: {task.Id}: {ex.Message}"); // 行内文案不变，失败留痕
             TaskFinished?.Invoke(this, task);
         }
     }

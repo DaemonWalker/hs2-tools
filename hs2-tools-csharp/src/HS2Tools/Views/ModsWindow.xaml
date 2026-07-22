@@ -1,11 +1,106 @@
 <Window x:Class="HS2Tools.Views.ModsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="本地模组" Width="1000" Height="700"
+        Title="本地模组" Width="1100" Height="720"
         Background="{DynamicResource WindowBackgroundBrush}">
-    <Grid>
-        <TextBlock Text="本地模组（阶段 3 实现）" FontSize="20"
-                   Foreground="{DynamicResource SecondaryForegroundBrush}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <Style x:Key="StatCard" TargetType="Border">
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="StatTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+        <Style x:Key="StatValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        </Style>
+        <Style x:Key="SecondaryText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 统计三卡（口径与首页数据概览一致） -->
+        <UniformGrid Columns="3" Margin="0,0,0,10">
+            <Border Style="{StaticResource StatCard}" Margin="0,0,6,0">
+                <StackPanel>
+                    <TextBlock Text="本地 Mods 总数" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding ModCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}" Margin="3,0,3,0">
+                <StackPanel>
+                    <TextBlock Text="被引用 Mods 数" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding UsageCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource AccentBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}" Margin="6,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="总引用次数" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding TotalRefs, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource SuccessBrush}"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <!-- 筛选（所有/未使用） + 刷新 -->
+        <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <RadioButton Content="所有" GroupName="ModFilter" IsChecked="True"
+                             VerticalAlignment="Center" Margin="0,0,12,0"
+                             Foreground="{DynamicResource ForegroundBrush}"/>
+                <!-- 同组互斥：选中「所有」时本项取消选中，绑定随之推回 false -->
+                <RadioButton Content="未使用" GroupName="ModFilter" VerticalAlignment="Center"
+                             IsChecked="{Binding ShowUnusedOnly, Mode=TwoWay}"
+                             Foreground="{DynamicResource ForegroundBrush}"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}"
+                    Padding="12,4"/>
+        </Grid>
+
+        <!-- 模组表格（列可点击排序、行虚拟化） -->
+        <DataGrid Grid.Row="2" ItemsSource="{Binding Mods}"
+                  AutoGenerateColumns="False" IsReadOnly="True"
+                  EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                  CanUserAddRows="False" CanUserDeleteRows="False"
+                  GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                  Background="{DynamicResource WindowBackgroundBrush}"
+                  RowBackground="{DynamicResource WindowBackgroundBrush}"
+                  Foreground="{DynamicResource ForegroundBrush}"
+                  BorderBrush="{DynamicResource BorderBrush}"
+                  HorizontalGridLinesBrush="{DynamicResource BorderBrush}"
+                  VerticalGridLinesBrush="{DynamicResource BorderBrush}">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="GUID" Binding="{Binding Guid}" Width="280" SortMemberPath="Guid"/>
+                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="220" SortMemberPath="Name"/>
+                <DataGridTextColumn Header="版本" Binding="{Binding Version}" Width="90" SortMemberPath="Version"/>
+                <DataGridTextColumn Header="使用次数" Binding="{Binding UsedCount}" Width="90" SortMemberPath="UsedCount"/>
+                <DataGridTextColumn Header="路径" Binding="{Binding Path}" Width="*" SortMemberPath="Path"/>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- 空态提示 -->
+        <TextBlock Grid.Row="2" Text="{Binding EmptyText}" FontSize="14" TextWrapping="Wrap"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40,0"
+                   Style="{StaticResource SecondaryText}"
+                   Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}"/>
     </Grid>
 </Window>

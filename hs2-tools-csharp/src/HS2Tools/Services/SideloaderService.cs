@@ -13,7 +13,7 @@ namespace HS2Tools.Services;
 /// 爬取 BetterRepack 目录列表，对每个远程 zipmod 只发 3~18 次 HTTP Range 小请求提取 GUID。
 /// Run 可重入（每次运行新建内部状态）；Cancel 只置标志位（已发出的请求不中断）。
 /// </summary>
-public class SideloaderService
+public class SideloaderService : ISideloaderService
 {
     public const string StartUrl = "https://sideload.betterrepack.com/download/AISHS2/";
 
@@ -182,6 +182,7 @@ public class SideloaderService
                     int count;
                     lock (run.ResultLock)
                         count = run.Result.Count;
+                    onLog?.Invoke($"Skipping {modUrl}: no GUID extracted");
                     onProgress?.Report(new SideloaderProgress(count, 0));
                 }
             }
@@ -283,7 +284,7 @@ public class SideloaderService
         };
     }
 
-    private async Task<byte[]?> FetchRangeAsync(string modUrl, long start, long end)
+    private async Task<byte[]?> FetchRangeAsync(string modUrl, long start, long end, RunState run)
     {
         try
         {
@@ -307,13 +308,14 @@ public class SideloaderService
             // 正常支持 Range 的站点（nginx/Cloudflare）恒返回 206，此分支仅在代理干预时触发。
             return null;
         }
-        catch
+        catch (Exception ex)
         {
+            run.Log?.Invoke($"Failed to fetch range {modUrl}: {ex.Message}");
             return null; // 原版忽略 fetchRange 错误
         }
     }
 
-    private async Task<long?> GetFileSizeAsync(string modUrl)
+    private async Task<long?> GetFileSizeAsync(string modUrl, RunState run)
     {
         try
         {
@@ -323,8 +325,9 @@ public class SideloaderService
             // 原版：ParseInt 头缺失/非法 → error → 返回 ""
             return resp.Content.Headers.ContentLength;
         }
-        catch
+        catch (Exception ex)
         {
+            run.Log?.Invoke($"Failed to get file size {modUrl}: {ex.Message}");
             return null;
         }
     }
@@ -336,7 +339,7 @@ public class SideloaderService
 
     private async Task<string> ExtractGuidFromZipmodAsync(string modUrl, RunState run)
     {
-        var size = await GetFileSizeAsync(modUrl);
+        var size = await GetFileSizeAsync(modUrl, run);
         if (size is null)
             return "";
         var totalSize = size.Value;
@@ -345,7 +348,7 @@ public class SideloaderService
         byte[]? wholeFile = null;
         if (totalSize <= SmallFileThreshold)
         {
-            data = await FetchRangeAsync(modUrl, 0, totalSize - 1);
+            data = await FetchRangeAsync(modUrl, 0, totalSize - 1, run);
             // 小文件已完整在内存：后续本地头/manifest 直接切片，不再发请求
             if (data != null && data.Length == totalSize)
                 wholeFile = data;
@@ -360,7 +363,7 @@ public class SideloaderService
                 var start = end - ChunkSize + 1;
                 if (start < 0)
                     start = 0;
-                var chunk = await FetchRangeAsync(modUrl, start, end);
+                var chunk = await FetchRangeAsync(modUrl, start, end, run);
                 data = Prepend(chunk, data);
                 var entries = ZipRemoteReader.ReadCentralDir(data, totalSize);
                 if (entries != null)
@@ -411,7 +414,7 @@ public class SideloaderService
         byte[]? headerData = wholeFile != null && headerStart < wholeFile.Length
             ? wholeFile[headerStart..Math.Min(headerStart + 201, wholeFile.Length)]
             : null;
-        headerData ??= await FetchRangeAsync(modUrl, entry.Offset, entry.Offset + 200);
+        headerData ??= await FetchRangeAsync(modUrl, entry.Offset, entry.Offset + 200, run);
         long dataOffset;
         uint compressedSize;
         if (ZipRemoteReader.TryParseLocalHeader(headerData, out var parsedOffset, out var parsedSize))
@@ -438,7 +441,7 @@ public class SideloaderService
         byte[]? manifestData = wholeFile != null && dataStart < wholeFile.Length
             ? wholeFile[dataStart..Math.Min(dataStart + (int)compressedSize, wholeFile.Length)]
             : null;
-        manifestData ??= await FetchRangeAsync(modUrl, actualOffset, actualOffset + compressedSize - 1);
+        manifestData ??= await FetchRangeAsync(modUrl, actualOffset, actualOffset + compressedSize - 1, run);
         return ZipRemoteReader.ExtractManifestGuid(manifestData, entry.CompressionMethod) ?? "";
     }
 

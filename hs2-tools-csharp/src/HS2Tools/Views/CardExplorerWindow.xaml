@@ -3,9 +3,290 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="单卡查看" Width="1000" Height="700"
         Background="{DynamicResource WindowBackgroundBrush}">
-    <Grid>
-        <TextBlock Text="单卡查看（阶段 3 实现）" FontSize="20"
-                   Foreground="{DynamicResource SecondaryForegroundBrush}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        </Style>
+        <Style x:Key="SecondaryText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+        <Style x:Key="OverlayText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+
+        <!-- 模组依赖卡片（人物/场景两种布局共用） -->
+        <DataTemplate x:Key="ModListTemplate">
+            <Border Style="{StaticResource Card}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Margin="12,10,12,8">
+                        <TextBlock Text="模组依赖" Style="{StaticResource CardTitle}"/>
+                        <TextBlock Text="{Binding ModCount, StringFormat=' ({0})'}" VerticalAlignment="Center"
+                                   Style="{StaticResource SecondaryText}"/>
+                        <TextBlock Text="{Binding ModLocalCount, StringFormat='已拥有 {0}'}" VerticalAlignment="Center"
+                                   Margin="10,0,0,0" FontSize="12" Foreground="{DynamicResource SuccessBrush}"/>
+                        <TextBlock Text="{Binding ModMissingCount, StringFormat='需下载 {0}'}" VerticalAlignment="Center"
+                                   Margin="10,0,0,0" FontSize="12" Foreground="{DynamicResource WarningBrush}"/>
+                    </StackPanel>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding ModItems}" BorderThickness="0"
+                             Background="Transparent" HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="12,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Guid}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Guid}"
+                                               Foreground="{DynamicResource ForegroundBrush}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding StatusText}" FontSize="12"
+                                               Foreground="{DynamicResource WarningBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource WarningBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsLocal}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Grid.Row="1" Text="未检测到模组依赖">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource OverlayText}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ModCount}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 工具栏：人物卡/场景卡切换 + 文件路径 + 清除/浏览 -->
+        <Grid Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <RadioButton Content="人物卡" IsChecked="{Binding IsCharaMode}" Padding="10,4" Margin="0,0,4,0"/>
+                <RadioButton Content="场景卡" IsChecked="{Binding IsSceneMode}" Padding="10,4"/>
+            </StackPanel>
+            <TextBox Grid.Column="1" Text="{Binding FilePath, UpdateSourceTrigger=PropertyChanged}"
+                     Padding="6,4" Margin="12,0,0,0" VerticalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="清除" Padding="10,4" Margin="8,0,0,0"
+                    Command="{Binding ClearFileCommand}"
+                    Visibility="{Binding HasFilePath, Converter={StaticResource BoolToVisibility}}"/>
+            <Button Grid.Column="3" Content="浏览" Padding="16,4" Margin="8,0,0,0"
+                    Command="{Binding BrowseCommand}"/>
+        </Grid>
+
+        <!-- 空态：未选文件 / 文件不存在或不是 PNG -->
+        <Border Grid.Row="1" Style="{StaticResource Card}"
+                Visibility="{Binding ShowEmpty, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="请选择一个 PNG 卡片文件" FontSize="16"
+                           Style="{StaticResource SecondaryText}"/>
+                <TextBlock Text="点击「浏览」按钮选择文件，或直接输入文件路径" FontSize="12" Margin="0,6,0,0"
+                           Style="{StaticResource SecondaryText}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 解析中 -->
+        <Border Grid.Row="1" Style="{StaticResource Card}"
+                Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <ProgressBar IsIndeterminate="True" Width="160" Height="4"/>
+                <TextBlock Text="解析中…" Margin="0,8,0,0" Style="{StaticResource OverlayText}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 解析失败 -->
+        <Border Grid.Row="1" Style="{StaticResource Card}"
+                Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}">
+            <TextBlock Text="{Binding ErrorMessage}" FontSize="14" TextWrapping="Wrap" Margin="40,0"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="{DynamicResource ErrorBrush}"/>
+        </Border>
+
+        <!-- 内容区：人物/场景两种布局（对应原版 SmartCardLayout vertical/horizontal） -->
+        <Grid Grid.Row="1" Visibility="{Binding ShowContent, Converter={StaticResource BoolToVisibility}}">
+
+            <!-- 人物卡：左图（2:3）右信息 -->
+            <Grid Visibility="{Binding IsCharaMode, Converter={StaticResource BoolToVisibility}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="300"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Style="{StaticResource Card}" Padding="8">
+                    <Grid>
+                        <Image Source="{Binding CardImage}" Stretch="Uniform"/>
+                        <TextBlock Text="暂无预览">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource OverlayText}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding CardImage}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+                </Border>
+                <Grid Grid.Column="1" Margin="12,0,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <!-- 角色信息 -->
+                    <Border Style="{StaticResource Card}" Padding="12,10">
+                        <StackPanel>
+                            <TextBlock Text="角色信息" Style="{StaticResource CardTitle}" Margin="0,0,0,6"/>
+                            <Grid Margin="0,2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="名称" Style="{StaticResource SecondaryText}"/>
+                                <TextBlock Grid.Column="1" Text="{Binding CharaName}" FontWeight="SemiBold"
+                                           TextWrapping="Wrap" Foreground="{DynamicResource ForegroundBrush}"/>
+                            </Grid>
+                            <Grid Margin="0,2"
+                                  Visibility="{Binding HasDescription, Converter={StaticResource BoolToVisibility}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="描述" Style="{StaticResource SecondaryText}"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Description}" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource ForegroundBrush}"/>
+                            </Grid>
+                            <Grid Margin="0,2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="游戏数据" Style="{StaticResource SecondaryText}"/>
+                                <TextBlock Grid.Column="1" Text="{Binding GameDataSizeText}"
+                                           Foreground="{DynamicResource ForegroundBrush}"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+                    <ContentControl Grid.Row="1" Margin="0,12,0,0"
+                                    Content="{Binding}" ContentTemplate="{StaticResource ModListTemplate}"/>
+                </Grid>
+            </Grid>
+
+            <!-- 场景卡：左列（图上 16:9 + 场景人物下）右列模组依赖 -->
+            <Grid Visibility="{Binding IsSceneMode, Converter={StaticResource BoolToVisibility}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="45*"/>
+                    <ColumnDefinition Width="55*"/>
+                </Grid.ColumnDefinitions>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="55*"/>
+                        <RowDefinition Height="45*"/>
+                    </Grid.RowDefinitions>
+                    <Border Style="{StaticResource Card}" Padding="8" Margin="0,0,0,6">
+                        <Grid>
+                            <Image Source="{Binding CardImage}" Stretch="Uniform"/>
+                            <TextBlock Text="暂无预览">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource OverlayText}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding CardImage}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </Border>
+                    <!-- 场景人物 -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,6,0,0">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel Margin="12,10,12,6">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="场景人物" Style="{StaticResource CardTitle}"/>
+                                    <TextBlock Text="{Binding SceneCharaCount, StringFormat=' ({0} 个)'}"
+                                               VerticalAlignment="Center" Style="{StaticResource SecondaryText}"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding GameDataSizeText, StringFormat='游戏数据：{0}'}"
+                                           FontSize="12" Margin="0,4,0,0" Style="{StaticResource SecondaryText}"/>
+                            </StackPanel>
+                            <ListBox Grid.Row="1" ItemsSource="{Binding SceneCharaNames}" BorderThickness="0"
+                                     Background="Transparent" HorizontalContentAlignment="Stretch"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" Margin="12,0" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding}" Foreground="{DynamicResource ForegroundBrush}"/>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <TextBlock Grid.Row="1" Text="未检测到场景人物">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource OverlayText}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SceneCharaCount}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </Border>
+                </Grid>
+                <ContentControl Grid.Column="1" Margin="12,0,0,0"
+                                Content="{Binding}" ContentTemplate="{StaticResource ModListTemplate}"/>
+            </Grid>
+        </Grid>
     </Grid>
 </Window>

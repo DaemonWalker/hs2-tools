@@ -1,0 +1,125 @@
+<UserControl x:Class="HS2Tools.Controls.CardGridControl"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HS2Tools.Controls">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 空状态 -->
+        <TextBlock x:Name="EmptyTextBlock" Grid.Row="0" Text="{Binding EmptyText, ElementName=Root}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryForegroundBrush}">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding TotalCount, ElementName=Root}" Value="0">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
+        <ItemsControl x:Name="GridItems" Grid.Row="0">
+            <ItemsControl.Template>
+                <ControlTemplate TargetType="ItemsControl">
+                    <ScrollViewer x:Name="Scroller" CanContentScroll="True"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <ItemsPresenter/>
+                    </ScrollViewer>
+                </ControlTemplate>
+            </ItemsControl.Template>
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <!-- 相对源绑定到控件自身的卡片尺寸（模板内无法 ElementName 到外层） -->
+                    <controls:VirtualizingWrapPanel
+                        ItemWidth="{Binding CardItemWidth, RelativeSource={RelativeSource AncestorType=controls:CardGridControl}}"
+                        ItemHeight="{Binding CardItemHeight, RelativeSource={RelativeSource AncestorType=controls:CardGridControl}}"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type controls:CardItemViewModel}">
+                    <Border Margin="4" CornerRadius="6" BorderThickness="1.5"
+                            Background="{DynamicResource CardBackgroundBrush}"
+                            BorderBrush="{DynamicResource BorderBrush}"
+                            MouseLeftButtonUp="Card_Click">
+                        <Border.Style>
+                            <Style TargetType="Border" BasedOn="{StaticResource {x:Type Border}}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="24"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Text="{Binding DisplayName}" Margin="6,0"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding DisplayName}"
+                                       Foreground="{DynamicResource ForegroundBrush}"/>
+
+                            <!-- 缩略图 + 无图占位 -->
+                            <Border Grid.Row="1" Margin="4" CornerRadius="4"
+                                    Background="{DynamicResource WindowBackgroundBrush}">
+                                <Grid>
+                                    <!-- 无缩略图时显示占位（可见性逻辑在 TextBlock 上，Image 常显） -->
+                                    <TextBlock Text="暂无预览" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource SecondaryForegroundBrush}" FontSize="12">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Thumbnail}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <Image Source="{Binding Thumbnail}" Stretch="UniformToFill"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- 收藏星标 -->
+                            <Button Grid.RowSpan="2" Content="♥" FontSize="14" Cursor="Hand"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                                    Margin="0,26,6,0" Padding="4,1"
+                                    Background="Transparent" BorderThickness="0"
+                                    ToolTip="收藏 / 取消收藏" Click="Favorite_Click">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsFavorite}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- 底部加载状态（对应原版：加载中... (x/y) / 已加载全部 N 个） -->
+        <TextBlock x:Name="FooterText" Grid.Row="1" Margin="0,4,0,0"
+                   HorizontalAlignment="Center" FontSize="12"
+                   Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+    </Grid>
+</UserControl>

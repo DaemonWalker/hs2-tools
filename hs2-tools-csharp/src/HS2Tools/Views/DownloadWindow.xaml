@@ -3,9 +3,193 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="下载任务" Width="1000" Height="700"
         Background="{DynamicResource WindowBackgroundBrush}">
-    <Grid>
-        <TextBlock Text="下载任务（阶段 3 实现）" FontSize="20"
-                   Foreground="{DynamicResource SecondaryForegroundBrush}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <Style x:Key="StatCard" TargetType="Border">
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style x:Key="StatTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+        <Style x:Key="StatValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+        </Style>
+        <Style x:Key="SecondaryText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+
+        <!-- 任务项模板（四个 Tab 共用）：名称 + 进度条（仅下载中）+ 状态文本 + 取消/重试 -->
+        <DataTemplate x:Key="TaskItemTemplate">
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="14,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="{Binding Id}" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Id}"
+                                   Foreground="{DynamicResource ForegroundBrush}"/>
+                        <ProgressBar Minimum="0" Maximum="100" Value="{Binding Percent}" Height="4" Margin="0,5"
+                                     Visibility="{Binding IsDownloading, Converter={StaticResource BoolToVisibility}}"/>
+                        <TextBlock Text="{Binding StatusText}" FontSize="12"
+                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding StatusText}"
+                                   Foreground="{DynamicResource SecondaryForegroundBrush}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                            <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="取消" Padding="10,3" VerticalAlignment="Center"
+                            ToolTip="取消下载"
+                            Command="{Binding DataContext.CancelCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                            CommandParameter="{Binding}"
+                            Visibility="{Binding ShowCancel, Converter={StaticResource BoolToVisibility}}"/>
+                    <Button Grid.Column="1" Content="重试" Padding="10,3" VerticalAlignment="Center"
+                            ToolTip="重试（断点续传）"
+                            Command="{Binding DataContext.RetryCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                            CommandParameter="{Binding}"
+                            Visibility="{Binding ShowRetry, Converter={StaticResource BoolToVisibility}}"/>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <Style x:Key="TaskList" TargetType="ListBox">
+            <Setter Property="Background" Value="{DynamicResource WindowBackgroundBrush}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="ItemTemplate" Value="{StaticResource TaskItemTemplate}"/>
+        </Style>
+        <Style x:Key="EmptyText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 标题栏 -->
+        <TextBlock Text="下载任务" FontSize="18" FontWeight="SemiBold"
+                   Margin="0,0,0,10" Foreground="{DynamicResource ForegroundBrush}"/>
+
+        <!-- 统计三卡：活跃任务 / 失败任务 / 总速度 -->
+        <UniformGrid Grid.Row="1" Columns="3" Margin="0,0,0,10">
+            <Border Style="{StaticResource StatCard}" Margin="0,0,6,0">
+                <StackPanel>
+                    <TextBlock Text="活跃任务" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding ActiveCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource AccentBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}" Margin="3,0,3,0">
+                <StackPanel>
+                    <TextBlock Text="失败任务" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding FailedCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource ErrorBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}" Margin="6,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="总速度" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding TotalSpeedText}" Style="{StaticResource StatValue}"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <!-- 操作按钮（右对齐；无对应任务时隐藏，照原版） -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,8">
+            <Button Content="全部取消" Padding="12,4"
+                    Command="{Binding CancelAllCommand}"
+                    Visibility="{Binding ShowCancelAll, Converter={StaticResource BoolToVisibility}}"/>
+            <Button Content="清除完成" Padding="12,4" Margin="8,0,0,0"
+                    Command="{Binding ClearFinishedCommand}"
+                    Visibility="{Binding ShowClearFinished, Converter={StaticResource BoolToVisibility}}"/>
+        </StackPanel>
+
+        <!-- 任务列表四 Tab -->
+        <TabControl Grid.Row="3"
+                    Background="{DynamicResource WindowBackgroundBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}">
+            <!-- 全部 -->
+            <TabItem>
+                <TabItem.Header>
+                    <TextBlock Text="{Binding TotalCount, StringFormat='全部 ({0})'}"/>
+                </TabItem.Header>
+                <Grid>
+                    <ListBox ItemsSource="{Binding AllTasks}" Style="{StaticResource TaskList}"/>
+                    <TextBlock Text="暂无下载任务" Style="{StaticResource EmptyText}"
+                               Visibility="{Binding IsAllEmpty, Converter={StaticResource BoolToVisibility}}"/>
+                </Grid>
+            </TabItem>
+            <!-- 下载中 -->
+            <TabItem>
+                <TabItem.Header>
+                    <TextBlock Text="{Binding ActiveCount, StringFormat='下载中 ({0})'}"/>
+                </TabItem.Header>
+                <Grid>
+                    <ListBox ItemsSource="{Binding ActiveTasks}" Style="{StaticResource TaskList}"/>
+                    <TextBlock Text="没有正在下载的任务" Style="{StaticResource EmptyText}"
+                               Visibility="{Binding IsActiveEmpty, Converter={StaticResource BoolToVisibility}}"/>
+                </Grid>
+            </TabItem>
+            <!-- 已完成 -->
+            <TabItem>
+                <TabItem.Header>
+                    <TextBlock Text="{Binding CompletedCount, StringFormat='已完成 ({0})'}"/>
+                </TabItem.Header>
+                <Grid>
+                    <ListBox ItemsSource="{Binding CompletedTasks}" Style="{StaticResource TaskList}"/>
+                    <TextBlock Text="没有已完成的任务" Style="{StaticResource EmptyText}"
+                               Visibility="{Binding IsCompletedEmpty, Converter={StaticResource BoolToVisibility}}"/>
+                </Grid>
+            </TabItem>
+            <!-- 失败（仅 Failed，不含已取消，照原版口径） -->
+            <TabItem>
+                <TabItem.Header>
+                    <TextBlock Text="{Binding FailedCount, StringFormat='失败 ({0})'}"/>
+                </TabItem.Header>
+                <Grid>
+                    <ListBox ItemsSource="{Binding FailedTasks}" Style="{StaticResource TaskList}"/>
+                    <TextBlock Text="没有失败的任务" Style="{StaticResource EmptyText}"
+                               Visibility="{Binding IsFailedEmpty, Converter={StaticResource BoolToVisibility}}"/>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <!-- 底部信息栏 -->
+        <Border Grid.Row="4" Margin="0,8,0,0" Padding="10,6" CornerRadius="6"
+                Background="{DynamicResource CardBackgroundBrush}">
+            <Grid>
+                <TextBlock Text="下载目录: mods/hs2-tool-download" FontSize="12"
+                           Style="{StaticResource SecondaryText}"/>
+                <TextBlock Text="{Binding TotalSpeedText, StringFormat='总速度: {0}'}" FontSize="12"
+                           HorizontalAlignment="Right" Foreground="{DynamicResource AccentBrush}"
+                           Visibility="{Binding ShowCancelAll, Converter={StaticResource BoolToVisibility}}"/>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

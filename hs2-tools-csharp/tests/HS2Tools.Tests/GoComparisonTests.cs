@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using HS2Tools.Services;
+using Xunit.Abstractions;
 
 namespace HS2Tools.Tests;
 
@@ -12,6 +13,9 @@ public class GoComparisonTests : IDisposable
 {
     private readonly string _dir = TestAssets.NewTempDir();
     private readonly ScannerService _svc = new();
+    private readonly ITestOutputHelper _output;
+
+    public GoComparisonTests(ITestOutputHelper output) => _output = output;
 
     public void Dispose() => TestAssets.DeleteDir(_dir);
 
@@ -241,6 +245,46 @@ public class GoComparisonTests : IDisposable
         Assert.Equal(goMap.Count, csMap.Count);
         foreach (var (path, goIds) in goMap)
             Assert.Equal(goIds, csMap[path]);
+    }
+
+    // ==================== 阶段 4：真实卡片终验（乱码卡名） ====================
+
+    /// <summary>
+    /// 真实卡片（含乱码名）对照：Go string(bytes) 保留无效 UTF-8 原始字节，
+    /// .NET 解码替换为 U+FFFD；但 Go 侧经 encoding/json 输出时同样替换为 U+FFFD，
+    /// 故两版在应用边界输出应逐一致。环境变量 HS2_REAL_CARD_DIRS（分号分隔目录）指向
+    /// 真实卡片目录时执行；同时统计含 U+FFFD 的卡数以确认乱码路径被真正覆盖。
+    /// </summary>
+    [SkippableFact]
+    public void RealCards_NamesAndMods_MatchGo()
+    {
+        RequireGo();
+        var dirsEnv = Environment.GetEnvironmentVariable("HS2_REAL_CARD_DIRS");
+        Skip.If(string.IsNullOrWhiteSpace(dirsEnv), "未设置 HS2_REAL_CARD_DIRS（真实卡片目录，分号分隔）");
+
+        var files = 0;
+        var garbledFiles = 0;
+        foreach (var dir in dirsEnv.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (var path in _svc.ScanDirectory(dir, new() { TargetExtension = { ".png" } }))
+            {
+                files++;
+                var goNames = RunGo($"-action readPngNames -path \"{path}\"")
+                    .EnumerateArray().Select(e => e.GetString()!).OrderBy(x => x).ToArray();
+                var csNames = _svc.ReadPngNames(path).OrderBy(x => x).ToArray();
+                if (csNames.Any(n => n.Contains('�')))
+                    garbledFiles++;
+                Assert.Equal(goNames, csNames);
+
+                var goMods = RunGo($"-action readPngMods -path \"{path}\"")
+                    .EnumerateArray().Select(e => e.GetString()!).OrderBy(x => x).ToArray();
+                var csMods = _svc.ReadPngMods(path).OrderBy(x => x).ToArray();
+                Assert.Equal(goMods, csMods);
+            }
+        }
+
+        _output.WriteLine($"compared {files} cards; {garbledFiles} contain U+FFFD (garbled) names");
+        Assert.True(files > 0);
     }
 
     [SkippableFact]

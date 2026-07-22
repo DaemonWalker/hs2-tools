@@ -45,6 +45,9 @@ public class ConfigService : IDisposable
     public static string DefaultConfigDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "hs2-tools");
 
+    /// <summary>配置目录（settings.json 与 sideload.json 所在目录）</summary>
+    public string ConfigDir => _configDir;
+
     public string SettingsPath => Path.Combine(_configDir, SettingsFileName);
 
     /// <summary>当前配置（启动时加载；通过 Update 修改）</summary>
@@ -66,8 +69,9 @@ public class ConfigService : IDisposable
             var json = File.ReadAllText(SettingsPath);
             return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
         }
-        catch
+        catch (Exception ex)
         {
+            ErrorLog.Log(ex); // 配置损坏回退空配置留痕
             return new AppSettings();
         }
     }
@@ -106,9 +110,18 @@ public class ConfigService : IDisposable
 
     private void WriteLocked()
     {
-        var json = JsonSerializer.Serialize(Settings, JsonOptions);
-        File.WriteAllText(SettingsPath, json);
-        _dirty = false;
+        try
+        {
+            var json = JsonSerializer.Serialize(Settings, JsonOptions);
+            File.WriteAllText(SettingsPath, json);
+            _dirty = false;
+        }
+        catch (Exception ex)
+        {
+            // 写盘失败保持脏标记（下次 Update 的防抖会重试）并记日志，永不抛出——
+            // Flush 跑在线程池 Timer 回调上，抛出即进程崩溃；Save/Dispose 同理吞掉
+            ErrorLog.Log(ex);
+        }
     }
 
     /// <summary>代理串（含认证），复刻 app.go getProxyString：替换 protocol:// 为 protocol://user:pass@</summary>

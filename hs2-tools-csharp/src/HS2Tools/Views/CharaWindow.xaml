@@ -1,11 +1,63 @@
 <Window x:Class="HS2Tools.Views.CharaWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="角色卡浏览" Width="1000" Height="700"
+        xmlns:controls="clr-namespace:HS2Tools.Controls"
+        Title="角色卡浏览" Width="1100" Height="760"
         Background="{DynamicResource WindowBackgroundBrush}">
-    <Grid>
-        <TextBlock Text="角色卡浏览（阶段 3 实现）" FontSize="20"
-                   Foreground="{DynamicResource SecondaryForegroundBrush}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <Style x:Key="SecondaryText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 工具栏：搜索（A2 接通）、总数、刷新、排序 -->
+        <Grid Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="女性角色" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"
+                       Foreground="{DynamicResource ForegroundBrush}"/>
+            <TextBox Grid.Column="1" x:Name="SearchBox" Width="240" HorizontalAlignment="Center"
+                     Padding="6,4" VerticalContentAlignment="Center"/>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock VerticalAlignment="Center" Margin="0,0,10,0" Style="{StaticResource SecondaryText}">
+                    <Run Text="共 "/><Run Text="{Binding TotalCount, ElementName=Grid, Mode=OneWay}"/><Run Text=" 个角色"/>
+                </TextBlock>
+                <Button Content="刷新" Padding="12,4" Click="Refresh_Click"/>
+                <ComboBox x:Name="SortBox" Width="110" Margin="8,0,0,0" Padding="4,2"
+                          SelectedValuePath="Tag" SelectedIndex="0">
+                    <ComboBoxItem Content="收藏优先" Tag="{x:Static controls:CardSortType.Favorite}"/>
+                    <ComboBoxItem Content="名称 A-Z" Tag="{x:Static controls:CardSortType.NameAsc}"/>
+                    <ComboBoxItem Content="名称 Z-A" Tag="{x:Static controls:CardSortType.NameDesc}"/>
+                    <ComboBoxItem Content="路径排序" Tag="{x:Static controls:CardSortType.Path}"/>
+                </ComboBox>
+            </StackPanel>
+        </Grid>
+
+        <controls:CardGridControl x:Name="Grid" Grid.Row="1"
+                                  CardKind="Chara"
+                                  ItemsSource="{Binding AllPaths}"
+                                  SelectedPath="{Binding SelectedPath, Mode=TwoWay}"
+                                  SearchText="{Binding Text, ElementName=SearchBox}"
+                                  EmptyText="{Binding EmptyText}"
+                                  SortType="{Binding SelectedValue, ElementName=SortBox}"/>
+
+        <!-- 详情面板（原版为底部抽屉；C# 版内嵌底部面板，与场景库共用 CardDetailPanel） -->
+        <Border Grid.Row="2" Margin="0,8,0,0" Padding="12" CornerRadius="8" Height="300"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">
+            <controls:CardDetailPanel DataContext="{Binding Detail}"/>
+        </Border>
     </Grid>
 </Window>

@@ -3,8 +3,10 @@
 本目录记录 HS2-Tools 从 **Wails(Go) + React** 迁移到 **.NET 8 + WPF** 的完整方案。
 迁移实施前请先通读本目录全部文档；本文档为导航与最终决策记录。
 
-> 状态：**阶段 0~2 已完成**（仓库根 `hs2-tools-csharp/`：解决方案骨架、5 个核心服务移植 + xUnit 104 项测试、应用骨架）。
+> 状态：**全部阶段（0~4）已完成**（仓库根 `hs2-tools-csharp/`：解决方案骨架、5 个核心服务移植、应用骨架、9 个页面迁移、打磨打包；xUnit 206 项测试）。
 > 阶段 1 验证已过：scanner 与 Go CLI 输出一致（每次测试自动构建基准 CLI）；sideloader 真实站点对照 go=12,472 / cs=12,366、guid 重合度 99.06%。
+> 阶段 3 修复原版 bug 3 处（爬虫更新不落盘、智能整理移动恒失败、停止状态误报成功），详见 [02-迁移方案.md](02-迁移方案.md) §10.4。
+> 阶段 4 乱码卡名终验已过（真实 15,141 卡与 Go CLI 输出完全一致）；发布 `publish/HS2Tools.exe` 单文件自包含 162MB，详见 [03-阶段计划.md](03-阶段计划.md) 阶段 4 完成记录。交互式 UI 冒烟移交用户。
 > 迁移期间现有 Go/Wails 代码不做任何修改。
 
 ## 文档导航
@@ -22,8 +24,9 @@
 | 0. 准备 | ✅ 完成 | `hs2-tools-csharp/HS2Tools.sln`：`src/HS2Tools`（net8.0-windows WPF）+ `tests/HS2Tools.Tests`（xUnit）；sideload.zip 内嵌资源；测试夹具以合成 PNG/zipmod 程序化生成（不提交大文件） |
 | 1. 核心服务移植 | ✅ 完成 | 5 个服务（Config/Scanner/Downloader+DownloadManager/Sideloader/GameLauncher）；xUnit **104 项全绿**；scanner 与 Go CLI 输出一致（测试自动构建基准 CLI）；sideloader 真实站点对照 go=12,472 / cs=12,366、**guid 重合度 99.06%**（29 分钟，内存 <40MB） |
 | 2. 应用骨架 | ✅ 完成 | ServiceContainer、WindowManager（单例+Hide/Show）、单主题资源字典、MainWindow 导航 + 7 占位窗口、游戏路径校验徽标；启动冒烟通过 |
-| 3. 页面迁移 | ⬜ 未开始 | — |
-| 4. 打磨打包 | ⬜ 未开始 | — |
+| 3. 页面迁移 | ✅ 完成 | 9 页面全部落地（Home 扫描/启动/爬虫更新/缺失补全/统计、CardGridControl 虚拟化网格、Chara/Scene 网格+详情、智能整理、Mods/Sideload/Download 表格页、单卡查看、设置）；xUnit **194 项全绿**；启动冒烟通过；修复原版 bug 3 处（02 §10.4） |
+| 4. 打磨打包 | ✅ 完成 | 三审计（异常/防重入/空态）修复 22 项（含缩略图触发器写反、ConfigService 写盘崩进程 2 个高危）；xUnit **202 项全绿**；乱码卡名终验：真实 15,141 卡与 Go CLI 输出完全一致；真实基准：6,325 zipmod 扫描 29s、全量三阶段 48s、12k 库建行 9ms；发布 `publish/HS2Tools.exe` 单文件自包含 162MB、启动冒烟通过；交互式 UI 冒烟移交用户 |
+
 
 阶段 1 实施期对原方案的修订（.NET 平台差异，重要）见 [02-迁移方案.md](02-迁移方案.md) 第 10 节。
 

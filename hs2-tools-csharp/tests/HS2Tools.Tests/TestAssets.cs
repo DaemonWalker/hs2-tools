@@ -3,12 +3,20 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using HS2Tools.Services;
 
 namespace HS2Tools.Tests;
 
 /// <summary>测试辅助：临时目录、合成 PNG / zipmod 夹具</summary>
 internal static class TestAssets
 {
+    static TestAssets()
+    {
+        // 全部测试的 ErrorLog 统一改写到测试目录，避免污染真实 %AppData%/hs2-tools/error.log
+        // （具体用例可再临时覆盖 DirectoryOverride，恢复时须还原到本值）
+        ErrorLog.DirectoryOverride = NewTempDir();
+    }
+
     public static string NewTempDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "hs2tools-tests", Guid.NewGuid().ToString("N"));

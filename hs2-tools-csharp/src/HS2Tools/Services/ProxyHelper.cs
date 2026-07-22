@@ -34,8 +34,9 @@ internal static class ProxyHelper
         {
             return BuildProxy(proxyUrl);
         }
-        catch
+        catch (Exception ex)
         {
+            ErrorLog.Log($"Invalid proxy url, fallback to direct: {proxyUrl}: {ex.Message}");
             return null;
         }
     }

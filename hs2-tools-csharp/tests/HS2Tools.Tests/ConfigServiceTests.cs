@@ -28,6 +28,75 @@ public class ConfigServiceTests : IDisposable
     }
 
     [Fact]
+    public void Load_CorruptFile_LogsError()
+    {
+        File.WriteAllText(Path.Combine(_dir, "settings.json"), "{ not json !!!");
+        var logDir = TestAssets.NewTempDir();
+        var prevOverride = ErrorLog.DirectoryOverride;
+        try
+        {
+            ErrorLog.DirectoryOverride = logDir;
+            using var config = new ConfigService(_dir);
+            Assert.Equal("", config.Settings.GamePath); // 损坏回退空配置
+            Assert.True(File.Exists(Path.Combine(logDir, "error.log"))); // 回退留痕
+        }
+        finally
+        {
+            ErrorLog.DirectoryOverride = prevOverride;
+            TestAssets.DeleteDir(logDir);
+        }
+    }
+
+    [Fact]
+    public void Save_WriteFailure_DoesNotThrow_AndLogs()
+    {
+        // settings.json 是个目录 → WriteAllText 必抛（模拟磁盘/权限故障）
+        Directory.CreateDirectory(Path.Combine(_dir, "settings.json"));
+        var logDir = TestAssets.NewTempDir();
+        var prevOverride = ErrorLog.DirectoryOverride;
+        try
+        {
+            ErrorLog.DirectoryOverride = logDir;
+            using var config = new ConfigService(_dir);
+            config.Update(s => s.GamePath = @"C:\HS2");
+            config.Save(); // 不抛出
+            Assert.True(File.Exists(Path.Combine(logDir, "error.log")));
+        }
+        finally
+        {
+            ErrorLog.DirectoryOverride = prevOverride;
+            TestAssets.DeleteDir(logDir);
+        }
+    }
+
+    [Fact]
+    public async Task Flush_WriteFailure_DoesNotCrashProcess()
+    {
+        // 防抖 Flush 跑在线程池 Timer 回调上：写盘失败若抛出则进程崩溃（阶段 4 修复）
+        Directory.CreateDirectory(Path.Combine(_dir, "settings.json"));
+        var logDir = TestAssets.NewTempDir();
+        var prevOverride = ErrorLog.DirectoryOverride;
+        try
+        {
+            ErrorLog.DirectoryOverride = logDir;
+            using var config = new ConfigService(_dir);
+            config.Update(s => s.GamePath = @"C:\HS2");
+
+            var logPath = Path.Combine(logDir, "error.log");
+            var deadline = DateTime.Now.AddSeconds(3);
+            while (!File.Exists(logPath) && DateTime.Now < deadline)
+                await Task.Delay(50);
+
+            Assert.True(File.Exists(logPath)); // Flush 失败已记日志且进程存活
+        }
+        finally
+        {
+            ErrorLog.DirectoryOverride = prevOverride;
+            TestAssets.DeleteDir(logDir);
+        }
+    }
+
+    [Fact]
     public void Update_FiresChanged_AndPersistsRoundtrip()
     {
         var changed = 0;

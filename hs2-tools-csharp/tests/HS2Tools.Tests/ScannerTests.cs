@@ -1,5 +1,6 @@
 using System.Text;
 using HS2Tools.Services;
+using Xunit.Abstractions;
 
 namespace HS2Tools.Tests;
 
@@ -7,8 +8,30 @@ public class ScannerTests : IDisposable
 {
     private readonly string _dir = TestAssets.NewTempDir();
     private readonly ScannerService _svc = new();
+    private readonly ITestOutputHelper _output;
+
+    public ScannerTests(ITestOutputHelper output) => _output = output;
 
     public void Dispose() => TestAssets.DeleteDir(_dir);
+
+    // ==================== 阶段 4：真实环境基准 ====================
+
+    /// <summary>真实 mods 目录（数千 zipmod）全量扫描耗时；设 HS2_REAL_MODS_DIR 时执行</summary>
+    [SkippableFact]
+    public async Task RealModsDir_ScanBenchmark()
+    {
+        var dir = Environment.GetEnvironmentVariable("HS2_REAL_MODS_DIR");
+        Skip.If(string.IsNullOrWhiteSpace(dir), "未设置 HS2_REAL_MODS_DIR（真实 mods 目录）");
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var files = _svc.ScanDirectory(dir, new() { TargetExtension = { ".zipmod" } });
+        var results = await _svc.ReadZipModBatchAsync(files);
+        sw.Stop();
+
+        _output.WriteLine($"{files.Count} zipmods → {results.Count} guids, {sw.ElapsedMilliseconds} ms");
+        Assert.True(files.Count > 0);
+        Assert.True(results.Count > 0);
+    }
 
     // ==================== ScanDirectory ====================
 

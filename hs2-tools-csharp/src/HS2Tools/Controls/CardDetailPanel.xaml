@@ -1,0 +1,209 @@
+<UserControl x:Class="HS2Tools.Controls.CardDetailPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style x:Key="SecondaryText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- 详情面板（对应原版 CharaDetailDrawer/SceneDetailDrawer：大图 | Mod 依赖 | 基本信息） -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="260"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- 大图（无图时显示占位文案） -->
+        <Border Margin="0,0,12,0" CornerRadius="4" ClipToBounds="True"
+                Background="{DynamicResource WindowBackgroundBrush}">
+            <Grid>
+                <TextBlock Text="暂无预览" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Foreground="{DynamicResource SecondaryForegroundBrush}" FontSize="12">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding DetailImage}" Value="{x:Null}">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <Image Source="{Binding DetailImage}" Stretch="Uniform"/>
+            </Grid>
+        </Border>
+
+        <!-- 模组依赖 -->
+        <Grid Grid.Column="1" Margin="0,0,12,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock FontWeight="SemiBold" VerticalAlignment="Center"
+                               Foreground="{DynamicResource ForegroundBrush}">
+                        <Run Text="模组依赖"/><Run Text="{Binding ModItems.Count, StringFormat=' {0} 个', Mode=OneWay}"/>
+                    </TextBlock>
+                    <TextBlock Margin="12,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource SuccessBrush}"
+                               Text="{Binding LocalCount, StringFormat='已拥有 {0}'}"/>
+                    <TextBlock Margin="8,0,0,0" VerticalAlignment="Center"
+                               Foreground="{DynamicResource WarningBrush}"
+                               Text="{Binding MissingCount, StringFormat='缺少 {0}'}"/>
+                </StackPanel>
+                <Button Padding="10,2" HorizontalAlignment="Right"
+                        Content="{Binding MissingCount, StringFormat='一键下载 ({0})'}"
+                        Command="{Binding DownloadAllMissingCommand}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding MissingCount}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </Grid>
+
+            <ListBox Grid.Row="1" Margin="0,8,0,0" BorderThickness="0"
+                     Background="Transparent" ItemsSource="{Binding ModItems}">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Guid}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding Guid}"
+                                       Foreground="{DynamicResource ForegroundBrush}" FontSize="12"/>
+
+                            <!-- 下载中：进度 + 取消 -->
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDownloading}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <ProgressBar Width="80" Height="8" Minimum="0" Maximum="100"
+                                             Value="{Binding Percent}"/>
+                                <Button Content="取消" Padding="8,1" Margin="6,0,0,0" FontSize="11"
+                                        Command="{Binding DataContext.CancelModCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                        CommandParameter="{Binding}"/>
+                            </StackPanel>
+
+                            <!-- 已完成 / 已拥有 / 下载 / 不可用 -->
+                            <TextBlock Grid.Column="1" Text="已完成" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource SuccessBrush}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ShowCompleted}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Grid.Column="1" Text="已拥有" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource SuccessBrush}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ShowOwned}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <Button Grid.Column="1" Content="下载" Padding="10,1" FontSize="11"
+                                    Command="{Binding DataContext.DownloadModCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                    CommandParameter="{Binding}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ShowDownload}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Grid.Column="1" Content="下载" Padding="10,1" FontSize="11" IsEnabled="False">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ShowUnavailable}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- 无模组依赖空态 -->
+            <TextBlock Grid.Row="1" Margin="0,8,0,0" Text="未检测到模组依赖"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="12">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ModItems.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Grid>
+
+        <!-- 基本信息（A5 标签已砍；A6 真实文件信息） -->
+        <StackPanel Grid.Column="2">
+            <TextBlock FontWeight="SemiBold" Foreground="{DynamicResource ForegroundBrush}">基本信息</TextBlock>
+            <TextBlock Margin="0,8,0,0" Style="{StaticResource SecondaryText}" FontSize="12">
+                <Run Text="名称："/><Run Text="{Binding DetailName, Mode=OneWay}" FontWeight="SemiBold"
+                                          Foreground="{DynamicResource AccentBrush}"/>
+            </TextBlock>
+            <TextBlock FontSize="12" TextWrapping="Wrap"
+                       Text="{Binding DetailDescription, StringFormat='描述：{0}'}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DetailDescription}" Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Margin="0,10,0,0" Style="{StaticResource SecondaryText}" FontSize="12"
+                       Text="{Binding DetailModified, StringFormat='修改时间：{0}'}"/>
+            <TextBlock Style="{StaticResource SecondaryText}" FontSize="12"
+                       Text="{Binding DetailSize, StringFormat='文件大小：{0}'}"/>
+            <TextBlock Margin="0,10,0,0" Style="{StaticResource SecondaryText}" FontSize="11"
+                       Text="{Binding DetailFilePath}" TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding DetailFilePath}"/>
+            <Button Content="打开所在文件夹" Margin="0,8,0,0" Padding="10,3"
+                    HorizontalAlignment="Left" Command="{Binding OpenInFolderCommand}"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

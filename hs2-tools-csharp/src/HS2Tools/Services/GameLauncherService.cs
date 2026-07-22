@@ -56,8 +56,8 @@ public class GameLauncherService
     private static extern uint SetThreadExecutionState(uint esFlags);
 
     /// <summary>阻止 Windows 休眠（SetThreadExecutionState ES_CONTINUOUS | ES_SYSTEM_REQUIRED）</summary>
-    public void PreventSleep() => SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+    public virtual void PreventSleep() => SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
 
     /// <summary>恢复 Windows 休眠（ES_CONTINUOUS）</summary>
-    public void AllowSleep() => SetThreadExecutionState(ES_CONTINUOUS);
+    public virtual void AllowSleep() => SetThreadExecutionState(ES_CONTINUOUS);
 }

@@ -1,6 +1,5 @@
 using System.Windows;
 using HS2Tools.Services;
-using HS2Tools.ViewModels;
 using HS2Tools.Views;
 
 namespace HS2Tools;
@@ -15,6 +14,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         Services = new ServiceContainer();
+        RestorePreventSleep(Services.Config, Services.GameLauncher); // 启动时恢复防休眠设置
 
         // 异常兜底：记日志 + 提示
         DispatcherUnhandledException += (_, args) =>
@@ -27,8 +27,7 @@ public partial class App : Application
 
         base.OnStartup(e);
 
-        var mainWindow = Services.Windows.Show<MainWindow>();
-        mainWindow.DataContext = new MainWindowViewModel(Services.Config);
+        Services.Windows.Show<MainWindow>(); // ViewModel 由窗口在 SourceInitialized 时自建
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -37,16 +36,12 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    internal static void LogException(Exception ex)
+    /// <summary>启动恢复：配置开启防休眠时立即生效（对应原版应用运行期间阻止休眠）</summary>
+    internal static void RestorePreventSleep(ConfigService config, GameLauncherService launcher)
     {
-        try
-        {
-            var logPath = Path.Combine(ConfigService.DefaultConfigDir, "error.log");
-            File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n");
-        }
-        catch
-        {
-            // 日志失败不二次抛错
-        }
+        if (config.Settings.PreventSleep)
+            launcher.PreventSleep();
     }
+
+    internal static void LogException(Exception ex) => ErrorLog.Log(ex);
 }
