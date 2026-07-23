@@ -2,9 +2,6 @@
 
 一个基于 **.NET 8 + WPF** 的 Windows 桌面应用，用于管理 HoneySelect2 游戏的模组和角色卡。
 
-> 本项目已由 Wails(Go) + React 迁移至 .NET 8 + WPF（旧代码已移除，git 历史可查）。
-> 迁移方案、行为复刻清单与验证记录见 [migration/](migration/README.md)。
-
 ## 功能特性
 
 - 🎮 游戏模组管理（扫描、使用统计、未使用筛选）
@@ -18,7 +15,7 @@
 
 - **框架**: .NET 8 LTS + WPF（`net8.0-windows`），MVVM（CommunityToolkit.Mvvm）
 - **HTML 解析**: HtmlAgilityPack
-- **测试**: xUnit（206 项，含与旧 Go CLI 的输出对照与真实环境基准）
+- **测试**: xUnit（206 项：解析器字节级回归、VM 测试、真实环境基准）
 
 ## 构建与测试
 
@@ -41,9 +38,12 @@ dotnet publish src/HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
 ├── hs2-tools-csharp/      # 应用本体（全部代码）
 │   ├── src/HS2Tools/        # WPF 应用（Services / ViewModels / Views / Controls）
 │   └── tests/HS2Tools.Tests/  # xUnit 测试
-├── migration/             # 迁移文档（方案、复刻清单、各阶段验收记录）
-└── docs/                  # 旧版（Wails）文档，存档参考
+└── docs/                  # 项目文档
 ```
+
+## 文档
+
+详见 [docs/](docs/README.md)：项目介绍、快速开始、架构设计、功能模块、开发规范。
 
 ## 运行环境
 
