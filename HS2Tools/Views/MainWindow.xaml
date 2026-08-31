@@ -37,10 +37,39 @@
             </Grid.RowDefinitions>
 
             <StackPanel>
-                <TextBlock Text="HS2 角色信息查看器" FontSize="26" FontWeight="Bold"
+                <!-- 顶部游戏切换器：数据来自 GameProfiles.All，当前游戏高亮且禁用 -->
+                <ItemsControl ItemsSource="{Binding GameSwitchItems}" Margin="0,0,0,12">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Content="{Binding DisplayName}" Padding="14,6" Margin="0,0,8,0"
+                                    Command="{Binding DataContext.SwitchGameCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                    CommandParameter="{Binding Id}">
+                                <Button.Style>
+                                    <Style TargetType="Button">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                                <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
+                                                <Setter Property="Foreground" Value="White"/>
+                                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="{Binding CurrentProfile.DisplayName, StringFormat={}{0} 角色信息查看器}"
+                           FontSize="26" FontWeight="Bold"
                            Foreground="{DynamicResource ForegroundBrush}"/>
-                <TextBlock Text="一站式管理你的 Honey Select 2 角色卡、场景和模组" Margin="0,2,0,16"
-                           Style="{StaticResource SecondaryText}"/>
+                <TextBlock Text="{Binding CurrentProfile.DisplayName, StringFormat=一站式管理你的 {0} 角色卡、场景和模组}"
+                           Margin="0,2,0,16" Style="{StaticResource SecondaryText}"/>
             </StackPanel>
 
             <!-- 第一行：数据分析 + 快速启动 -->

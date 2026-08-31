@@ -15,8 +15,13 @@ namespace HS2Tools.Services;
 public class ScannerService
 {
     // 标记定义（回退路径：结构化解析失败时的旧字节扫描，Unity BinaryWriter 序列化上下文关键词）
+    // HS2/AIS：fullname..personality；KK/KKS：ChaFileParameter 字段相邻（lastname..firstname /
+    // firstname..nickname，基准 kkloader ChaFileParameter）。ModID..Slot 为 UAR 格式，各游戏相同。
     private static readonly byte[] NameStart = "fullname"u8.ToArray();
     private static readonly byte[] NameEnd = "personality"u8.ToArray();
+    private static readonly byte[] KkLastStart = "lastname"u8.ToArray();
+    private static readonly byte[] KkFirstStart = "firstname"u8.ToArray();
+    private static readonly byte[] KkNickEnd = "nickname"u8.ToArray();
     private static readonly byte[] ModStart = "ModID"u8.ToArray();
     private static readonly byte[] ModEnd = "Slot"u8.ToArray();
 
@@ -158,10 +163,10 @@ public class ScannerService
             if (structuralOk)
                 return wantNames ? names : modIds;
             ErrorLog.Log($"structural parse failed, fallback to byte scan in data region ({data.Length - offset} bytes)");
-            return SearchBuffer(wantNames ? NameStart : ModStart, wantNames ? NameEnd : ModEnd, data[offset..]);
+            return wantNames ? SearchNames(data[offset..]) : SearchBuffer(ModStart, ModEnd, data[offset..]);
         }
         // 无 IEND（非卡片文件）：保持旧行为，全文件回退扫描
-        return SearchBuffer(wantNames ? NameStart : ModStart, wantNames ? NameEnd : ModEnd, data);
+        return wantNames ? SearchNames(data) : SearchBuffer(ModStart, ModEnd, data);
     }
 
     /// <summary>数据区起点 = 最后一个 IEND 的 'D' 之后 + 4 字节 CRC（越界钳制）；无 IEND 返回 -1</summary>
@@ -171,6 +176,20 @@ public class ScannerService
         if (iend < 0)
             return -1;
         return Math.Min(iend + 4, data.Length);
+    }
+
+    /// <summary>
+    /// 回退名字扫描（多游戏）：先 HS2/AIS 模式（fullname..personality）；
+    /// 无结果再试 KK/KKS（lastname..firstname 与 firstname..nickname 两段合并去重）。
+    /// </summary>
+    private static List<string> SearchNames(byte[] data)
+    {
+        var names = SearchBuffer(NameStart, NameEnd, data);
+        if (names.Count > 0)
+            return names;
+        var last = SearchBuffer(KkLastStart, KkFirstStart, data);
+        var first = SearchBuffer(KkFirstStart, KkNickEnd, data);
+        return last.Concat(first).Distinct().ToList();
     }
 
     /// <summary>
@@ -276,7 +295,7 @@ public class ScannerService
         {
             ErrorLog.Log($"ParsePngData structural parse failed, fallback to byte scan: {filePath}");
             var region = data[offset..];
-            names = SearchBuffer(NameStart, NameEnd, region);
+            names = SearchNames(region);
             modIds = SearchBuffer(ModStart, ModEnd, region);
         }
 

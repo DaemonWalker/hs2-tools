@@ -73,7 +73,7 @@ public partial class ModsWindowViewModel : ObservableObject
     /// <summary>从 Config.Settings 重建主列表与统计（对应原版 useMemo(mods/useage)）</summary>
     private void Reload()
     {
-        var settings = _config.Settings;
+        var settings = _config.Settings.Current;
 
         // 原版 createUsageMap：usage key 转小写建 Map，查找时 guid 也转小写 → 整体大小写不敏感；
         // 大小写重复时后者覆盖（与 JS Map.set 一致），故用 OrdinalIgnoreCase 字典手工填充
@@ -119,7 +119,7 @@ public partial class ModsWindowViewModel : ObservableObject
 
     /// <summary>
     /// 刷新（对应原版 scanMods）：ScanDirectory(.zipmod) + ReadZipModBatchAsync，
-    /// 结果写回 Config.Settings.LocalMods（Changed 事件驱动 Reload）。
+    /// 结果写回 Config.Settings.Current.LocalMods（Changed 事件驱动 Reload）。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanRefresh))]
     private async Task RefreshAsync()
@@ -134,7 +134,7 @@ public partial class ModsWindowViewModel : ObservableObject
                 var files = _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".zipmod" } });
                 mods = await _scanner.ReadZipModBatchAsync(files, onError: LogScanError);
             }
-            _config.Update(s => s.LocalMods = mods);
+            _config.Update(s => s.Current.LocalMods = mods);
         }
         finally
         {

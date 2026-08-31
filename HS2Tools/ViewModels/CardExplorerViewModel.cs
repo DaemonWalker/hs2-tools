@@ -15,7 +15,7 @@ public partial class CardExplorerModItem : ObservableObject
     /// <summary>Mod GUID</summary>
     public required string Guid { get; init; }
 
-    /// <summary>本地已拥有（Config.Settings.LocalMods 中存在）</summary>
+    /// <summary>本地已拥有（Config.Settings.Current.LocalMods 中存在）</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusText))]
     private bool _isLocal;
@@ -189,7 +189,7 @@ public partial class CardExplorerViewModel : ObservableObject
 
         ModItems.Clear();
         foreach (var guid in result.ModIDs)
-            ModItems.Add(new CardExplorerModItem { Guid = guid, IsLocal = _config.Settings.LocalMods.ContainsKey(guid) });
+            ModItems.Add(new CardExplorerModItem { Guid = guid, IsLocal = _config.Settings.Current.LocalMods.ContainsKey(guid) });
         RefreshModCounts();
     }
 
@@ -197,7 +197,7 @@ public partial class CardExplorerViewModel : ObservableObject
     private void RefreshModLocalState()
     {
         foreach (var item in ModItems)
-            item.IsLocal = _config.Settings.LocalMods.ContainsKey(item.Guid);
+            item.IsLocal = _config.Settings.Current.LocalMods.ContainsKey(item.Guid);
         RefreshModCounts();
     }
 

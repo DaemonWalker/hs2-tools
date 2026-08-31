@@ -18,7 +18,7 @@ public enum CardKind
 /// 数据流对齐原版：全量路径（ItemsSource）→ 搜索过滤/排序 → 按批解析可视增量
 /// （每批 24，ScannerService.ReadPngPageDataBatchAsync 一次读盘拿名称+缩略图），
 /// 滚动接近底部（200px 阈值）自动加载下一批；缩略图 LRU 缓存控内存。
-/// 收藏读写统一配置（ConfigService.Settings.Favorites）。
+/// 收藏读写统一配置（ConfigService.Settings.Current.Favorites，按游戏隔离）。
 /// </summary>
 public partial class CardGridControl : UserControl
 {
@@ -206,7 +206,7 @@ public partial class CardGridControl : UserControl
         _loadCts?.Cancel();
         _sorted = CardSortHelper.FilterAndSort(
             ItemsSource ?? (IReadOnlyList<string>)Array.Empty<string>(),
-            SearchText, SortType, _config?.Settings.Favorites);
+            SearchText, SortType, _config?.Settings.Current.Favorites);
         _loadedPaths.Clear();
         _cards.Clear();
         _thumbnailCache.Clear();
@@ -324,12 +324,12 @@ public partial class CardGridControl : UserControl
         e.Handled = true; // 不触发卡片选中
         if (_config is null || sender is not FrameworkElement { DataContext: CardItemViewModel card })
             return;
-        _config.Update(s => s.Favorites = CardSortHelper.ToggleFavorite(s.Favorites, card.Path));
+        _config.Update(s => s.Current.Favorites = CardSortHelper.ToggleFavorite(s.Current.Favorites, card.Path));
         // 星标刷新与（收藏优先模式下的）重排在 OnConfigChanged 中处理
     }
 
     private bool IsFavoritePath(string path) =>
-        _config?.Settings.Favorites.Any(f => CardSortHelper.NormalizePath(f) == CardSortHelper.NormalizePath(path)) == true;
+        _config?.Settings.Current.Favorites.Any(f => CardSortHelper.NormalizePath(f) == CardSortHelper.NormalizePath(path)) == true;
 
     private void OnConfigChanged(object? sender, EventArgs e)
     {
@@ -342,7 +342,7 @@ public partial class CardGridControl : UserControl
         {
             _sorted = CardSortHelper.FilterAndSort(
                 ItemsSource ?? (IReadOnlyList<string>)Array.Empty<string>(),
-                SearchText, SortType, _config?.Settings.Favorites);
+                SearchText, SortType, _config?.Settings.Current.Favorites);
 
             var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < _sorted.Count; i++)

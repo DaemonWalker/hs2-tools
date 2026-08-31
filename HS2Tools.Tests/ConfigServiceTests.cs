@@ -1,7 +1,10 @@
+using System.Text.Json;
 using HS2Tools.Services;
 
 namespace HS2Tools.Tests;
 
+// ErrorLog.DirectoryOverride 是静态全局：凡临时改动它的测试类归入同一 collection 串行执行
+[Collection("ErrorLogOverride")]
 public class ConfigServiceTests : IDisposable
 {
     private readonly string _dir = TestAssets.NewTempDir();
@@ -12,11 +15,11 @@ public class ConfigServiceTests : IDisposable
     public void Load_MissingFile_ReturnsDefaults()
     {
         using var config = new ConfigService(_dir);
-        Assert.Equal("", config.Settings.GamePath);
+        Assert.Equal("", config.Settings.Current.GamePath);
         Assert.False(config.Settings.PreventSleep);
-        Assert.Empty(config.Settings.Favorites);
-        Assert.Empty(config.Settings.LocalMods);
-        Assert.Empty(config.Settings.ModUsage);
+        Assert.Empty(config.Settings.Current.Favorites);
+        Assert.Empty(config.Settings.Current.LocalMods);
+        Assert.Empty(config.Settings.Current.ModUsage);
     }
 
     [Fact]
@@ -24,7 +27,7 @@ public class ConfigServiceTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_dir, "settings.json"), "{ not json !!!");
         using var config = new ConfigService(_dir);
-        Assert.Equal("", config.Settings.GamePath);
+        Assert.Equal("", config.Settings.Current.GamePath);
     }
 
     [Fact]
@@ -37,7 +40,7 @@ public class ConfigServiceTests : IDisposable
         {
             ErrorLog.DirectoryOverride = logDir;
             using var config = new ConfigService(_dir);
-            Assert.Equal("", config.Settings.GamePath); // 损坏回退空配置
+            Assert.Equal("", config.Settings.Current.GamePath); // 损坏回退空配置
             Assert.True(File.Exists(Path.Combine(logDir, "error.log"))); // 回退留痕
         }
         finally
@@ -58,7 +61,7 @@ public class ConfigServiceTests : IDisposable
         {
             ErrorLog.DirectoryOverride = logDir;
             using var config = new ConfigService(_dir);
-            config.Update(s => s.GamePath = @"C:\HS2");
+            config.Update(s => s.Current.GamePath = @"C:\HS2");
             config.Save(); // 不抛出
             Assert.True(File.Exists(Path.Combine(logDir, "error.log")));
         }
@@ -80,7 +83,7 @@ public class ConfigServiceTests : IDisposable
         {
             ErrorLog.DirectoryOverride = logDir;
             using var config = new ConfigService(_dir);
-            config.Update(s => s.GamePath = @"C:\HS2");
+            config.Update(s => s.Current.GamePath = @"C:\HS2");
 
             var logPath = Path.Combine(logDir, "error.log");
             var deadline = DateTime.Now.AddSeconds(3);
@@ -105,34 +108,34 @@ public class ConfigServiceTests : IDisposable
             config.Changed += (_, _) => changed++;
             config.Update(s =>
             {
-                s.GamePath = @"C:\Games\HS2";
+                s.Current.GamePath = @"C:\Games\HS2";
                 s.Proxy.Uri = "http://127.0.0.1:7890";
                 s.Proxy.Username = "u";
                 s.Proxy.Password = "p";
                 s.PreventSleep = true;
-                s.Favorites.Add(@"C:\cards\a.png");
-                s.LocalMods["com.test"] = new() { Name = "Test", Version = "1.0", Path = @"C:\mods\a.zipmod" };
-                s.ModUsage["com.test"] = 3;
+                s.Current.Favorites.Add(@"C:\cards\a.png");
+                s.Current.LocalMods["com.test"] = new() { Name = "Test", Version = "1.0", Path = @"C:\mods\a.zipmod" };
+                s.Current.ModUsage["com.test"] = 3;
             });
             config.Save();
         }
         Assert.Equal(1, changed);
 
         using var reloaded = new ConfigService(_dir);
-        Assert.Equal(@"C:\Games\HS2", reloaded.Settings.GamePath);
+        Assert.Equal(@"C:\Games\HS2", reloaded.Settings.Current.GamePath);
         Assert.Equal("http://127.0.0.1:7890", reloaded.Settings.Proxy.Uri);
         Assert.Equal("u", reloaded.Settings.Proxy.Username);
         Assert.True(reloaded.Settings.PreventSleep);
-        Assert.Equal(new[] { @"C:\cards\a.png" }, reloaded.Settings.Favorites);
-        Assert.Equal("Test", reloaded.Settings.LocalMods["com.test"].Name);
-        Assert.Equal(3, reloaded.Settings.ModUsage["com.test"]);
+        Assert.Equal(new[] { @"C:\cards\a.png" }, reloaded.Settings.Current.Favorites);
+        Assert.Equal("Test", reloaded.Settings.Current.LocalMods["com.test"].Name);
+        Assert.Equal(3, reloaded.Settings.Current.ModUsage["com.test"]);
     }
 
     [Fact]
     public void Update_DebouncedSave_WritesFile()
     {
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = @"D:\HS2");
+        config.Update(s => s.Current.GamePath = @"D:\HS2");
 
         // 防抖 500ms，轮询等待落盘
         var path = config.SettingsPath;
@@ -182,10 +185,87 @@ public class ConfigServiceTests : IDisposable
     public void DerivedPaths_CombinedWhenGamePathSet()
     {
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = @"C:\HS2");
+        config.Update(s => s.Current.GamePath = @"C:\HS2");
         Assert.Equal(@"C:\HS2\UserData\chara\female", config.GetCharaDir());
         Assert.Equal(@"C:\HS2\UserData\Studio\scene", config.GetSceneDir());
         Assert.Equal(@"C:\HS2\mods", config.GetModsDir());
         Assert.Equal(@"C:\HS2\mods\hs2-tool-download", config.GetModDownloadDir());
+    }
+
+    // ==================== 多游戏：旧 schema 迁移 ====================
+
+    [Fact]
+    public void Load_LegacySchema_MigratesToHs2_AndRewritesFile()
+    {
+        // 旧版单游戏 schema：顶层 gamePath/favorites/localMods/modUsage
+        var path = Path.Combine(_dir, "settings.json");
+        File.WriteAllText(path, """
+            {
+              "gamePath": "C:\\Games\\HS2",
+              "favorites": ["C:\\cards\\a.png", "C:\\cards\\b.png"],
+              "localMods": { "com.test.mod": { "name": "Mod A", "version": "1.0", "path": "C:\\mods\\a.zipmod" } },
+              "modUsage": { "com.test.mod": 5 },
+              "preventSleep": true
+            }
+            """);
+
+        using var config = new ConfigService(_dir);
+
+        Assert.Equal("hs2", config.Settings.CurrentGame);
+        var entry = Assert.Single(config.Settings.Games);
+        Assert.Equal("hs2", entry.Key);
+        Assert.Equal(@"C:\Games\HS2", entry.Value.GamePath);
+        Assert.Equal(new[] { @"C:\cards\a.png", @"C:\cards\b.png" }, entry.Value.Favorites);
+        Assert.Equal("Mod A", entry.Value.LocalMods["com.test.mod"].Name);
+        Assert.Equal(5, entry.Value.ModUsage["com.test.mod"]);
+        Assert.Equal(@"C:\Games\HS2", config.Settings.Current.GamePath); // Current 指向迁移结果
+        Assert.True(config.Settings.PreventSleep); // 顶层字段不受影响
+
+        // 迁移后立即落盘为新 schema：顶层不再有 gamePath 等旧字段，改由 games.hs2 承载
+        using var doc = JsonDocument.Parse(File.ReadAllText(path));
+        var root = doc.RootElement;
+        Assert.False(root.TryGetProperty("gamePath", out _));
+        Assert.False(root.TryGetProperty("favorites", out _));
+        Assert.False(root.TryGetProperty("localMods", out _));
+        Assert.False(root.TryGetProperty("modUsage", out _));
+        Assert.True(root.TryGetProperty("games", out var games));
+        Assert.Equal(@"C:\Games\HS2", games.GetProperty("hs2").GetProperty("gamePath").GetString());
+    }
+
+    [Fact]
+    public void Load_NewSchema_NotMigrated_FileUntouched()
+    {
+        // 已含 "games" 字段即视为新 schema：不迁移（顶层旧字段被忽略），也不重写文件
+        var path = Path.Combine(_dir, "settings.json");
+        var json = """
+            {
+              "currentGame": "kk",
+              "games": { "kk": { "gamePath": "D:\\KK", "modUsage": { "com.kk.mod": 2 } } },
+              "gamePath": "C:\\LegacyShouldBeIgnored"
+            }
+            """;
+        File.WriteAllText(path, json);
+
+        using var config = new ConfigService(_dir);
+
+        Assert.Equal("kk", config.Settings.CurrentGame);
+        Assert.Equal(@"D:\KK", config.Settings.Current.GamePath);
+        Assert.Equal(2, config.Settings.Current.ModUsage["com.kk.mod"]);
+        Assert.False(config.Settings.Games.ContainsKey("hs2"));
+        Assert.Equal(json, File.ReadAllText(path)); // 未触发迁移落盘
+    }
+
+    [Fact]
+    public void Load_EmptyObject_NoMigration_FileUntouched()
+    {
+        // 空对象：无 games 也无旧字段，不迁移、不重写
+        var path = Path.Combine(_dir, "settings.json");
+        File.WriteAllText(path, "{}");
+
+        using var config = new ConfigService(_dir);
+
+        Assert.Equal("hs2", config.Settings.CurrentGame);
+        Assert.Equal("", config.Settings.Current.GamePath); // Current 就地创建空数据
+        Assert.Equal("{}", File.ReadAllText(path));
     }
 }

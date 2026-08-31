@@ -15,7 +15,7 @@ public partial class SideloadItemViewModel : ObservableObject
     /// <summary>下载地址（相对路径）</summary>
     public required string Url { get; init; }
 
-    /// <summary>本地已存在（Config.Settings.LocalMods 中存在）</summary>
+    /// <summary>本地已存在（Config.Settings.Current.LocalMods 中存在）</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusText))]
     [NotifyPropertyChangedFor(nameof(CanDownload))]
@@ -134,7 +134,7 @@ public partial class SideloadWindowViewModel : ObservableObject
     private void Reload()
     {
         var db = _sideloadDb.Database;
-        var localMods = _config.Settings.LocalMods;
+        var localMods = _config.Settings.Current.LocalMods;
 
         _all = db.Select(kv =>
         {
@@ -168,6 +168,9 @@ public partial class SideloadWindowViewModel : ObservableObject
         item.Percent = task.Percent;
     }
 
+    /// <summary>测试用：非 null 时覆盖下载 base URL（默认取当前游戏档案的 SideloadBaseUrl）</summary>
+    internal string? DownloadBaseUrlOverride;
+
     /// <summary>单条下载（对应原版 handleDownload：triggerDownload({ name: guid, url })）</summary>
     [RelayCommand]
     private void Download(SideloadItemViewModel item)
@@ -175,7 +178,8 @@ public partial class SideloadWindowViewModel : ObservableObject
         var dir = _config.GetModDownloadDir();
         if (dir is null)
             return;
-        if (_downloads.StartDownload(item.Guid, item.Url, dir))
+        if (_downloads.StartDownload(item.Guid, item.Url, dir,
+                DownloadBaseUrlOverride ?? _config.CurrentProfile.SideloadBaseUrl))
             UpdateItemStatus(FindTask(item.Guid)!); // 即时刷新按钮态（事件随后也会到）
     }
 }

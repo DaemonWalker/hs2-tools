@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text;
+using HS2Tools.Models;
 using MessagePack;
 
 namespace HS2Tools.Services;
@@ -9,23 +10,55 @@ namespace HS2Tools.Services;
 /// 只使用底层 MessagePackReader 步行结构，不用类型 resolver，避免格式变体风险。
 ///
 /// ChaFile blob 布局（BinaryWriter 序列化）：
-/// int32 loadProductNo → 7bit 前缀字符串【AIS_Chara】→ 7bit 前缀版本字符串
+/// int32 loadProductNo → 7bit 前缀字符串卡头标记 → 7bit 前缀版本字符串
 /// → int32 lang → 7bit 前缀 userID → 7bit 前缀 dataID
 /// → int32 BlockHeader 字节数 → BlockHeader msgpack（{ "lstInfo": [ [name, version, pos, size], ... ] }）
 /// → int64 块数据总长度 → 各块数据（pos/size 相对于块数据区起点）。
-/// 角色名在 Parameter/Parameter2 块 msgpack map 的 "fullname" 键；
-/// Mod GUID 在 KKEx 块（或文件尾 KKEx trailer）的 UAR 插件数据里。
+///
+/// 多游戏（GameProfiles）：HS2 卡头【AIS_Chara】/【AIS_Clothes】，KK/KKS 卡头
+/// 【KoiKatuChara】/【KoiKatuClothes】（KK 与 KKS 卡片格式相同，基准 kkloader 两者共用
+/// KoikatuCharaData）；按命中的标记自动识别格式，不依赖"当前游戏"状态。
+/// 角色名在 Parameter/Parameter2 块 msgpack map 的名字段键（HS2 "fullname"；
+/// KK/KKS "lastname"+"firstname" 按序拼接）；Mod GUID 在 KKEx 块（或文件尾 KKEx trailer）
+/// 的 UAR 插件数据里——KKEx/UAR 结构各游戏相同。
 /// </summary>
 internal static class CharaCardParser
 {
-    // 卡头标记（HS2 沿用 AI 格式）：角色卡 15 字节、坐标卡 17 字节
-    private static readonly byte[] CharaMarker = "【AIS_Chara】"u8.ToArray();
-    private static readonly byte[] ClothesMarker = "【AIS_Clothes】"u8.ToArray();
-    private static readonly byte[] KkexMark = "KKEx"u8.ToArray();
+    /// <summary>一套卡片格式：角色卡/坐标卡标记 + Parameter 块名字段键</summary>
+    private sealed class CardFormat
+    {
+        public required byte[] CharaMarker;
+        public required byte[] ClothesMarker;
+        public required string[] NameKeys;
+    }
+
+    // 格式表从 GameProfiles 派生（KK/KKS 标记相同，按 CharaMarker 去重）
+    private static readonly CardFormat[] Formats = BuildFormats();
+
+    private static CardFormat[] BuildFormats()
+    {
+        var list = new List<CardFormat>();
+        foreach (var p in GameProfiles.All)
+        {
+            var charaMarker = Encoding.UTF8.GetBytes(p.CharaMarker);
+            if (list.Any(f => f.CharaMarker.AsSpan().SequenceEqual(charaMarker)))
+                continue;
+            list.Add(new CardFormat
+            {
+                CharaMarker = charaMarker,
+                ClothesMarker = Encoding.UTF8.GetBytes(p.ClothesMarker),
+                NameKeys = p.NameKeys,
+            });
+        }
+        return list.ToArray();
+    }
 
     // Sideloader UniversalAutoResolver 插件 ID（新 + 旧兼容）；其他插件数据一律忽略
     private const string UarPluginId = "com.bepis.sideloader.universalautoresolver";
     private const string UarPluginIdLegacy = "EC.Core.Sideloader.UniversalAutoResolver";
+
+    // KKEx trailer 定位标记（块名固定为 "KKEx"，各游戏相同）
+    private static readonly byte[] KkexMark = "KKEx"u8.ToArray();
 
     /// <summary>
     /// 解析数据区（最后一个 IEND + 4 字节 CRC 之后的部分）。
@@ -40,12 +73,12 @@ internal static class CharaCardParser
         var blobFound = 0;
         var blobOk = 0;
 
-        foreach (var (pos, marker) in FindMarkers(region))
+        foreach (var (pos, marker, format) in FindMarkers(region))
         {
             blobFound++;
             try
             {
-                ParseCharaBlob(region, pos, marker, names, modIds);
+                ParseCharaBlob(region, pos, marker, format, names, modIds);
                 blobOk++;
             }
             catch (Exception ex)
@@ -70,16 +103,21 @@ internal static class CharaCardParser
 
     // ==================== blob 定位 ====================
 
-    private static List<(int Pos, byte[] Marker)> FindMarkers(ReadOnlySpan<byte> region)
+    /// <summary>扫描所有已注册格式的角色卡/坐标卡标记（多游戏自动识别）</summary>
+    private static List<(int Pos, byte[] Marker, CardFormat Format)> FindMarkers(ReadOnlySpan<byte> region)
     {
-        var list = new List<(int Pos, byte[] Marker)>();
-        FindAll(region, CharaMarker, list);
-        FindAll(region, ClothesMarker, list);
+        var list = new List<(int Pos, byte[] Marker, CardFormat Format)>();
+        foreach (var format in Formats)
+        {
+            FindAll(region, format.CharaMarker, format, list);
+            FindAll(region, format.ClothesMarker, format, list);
+        }
         list.Sort((a, b) => a.Pos.CompareTo(b.Pos));
         return list;
     }
 
-    private static void FindAll(ReadOnlySpan<byte> region, byte[] marker, List<(int Pos, byte[] Marker)> list)
+    private static void FindAll(ReadOnlySpan<byte> region, byte[] marker, CardFormat format,
+        List<(int Pos, byte[] Marker, CardFormat Format)> list)
     {
         var pos = 0;
         while (true)
@@ -87,14 +125,14 @@ internal static class CharaCardParser
             var idx = region[pos..].IndexOf(marker);
             if (idx < 0)
                 break;
-            list.Add((pos + idx, marker));
+            list.Add((pos + idx, marker, format));
             pos += idx + 1;
         }
     }
 
     // ==================== ChaFile blob ====================
 
-    private static void ParseCharaBlob(ReadOnlySpan<byte> region, int markerPos, byte[] marker,
+    private static void ParseCharaBlob(ReadOnlySpan<byte> region, int markerPos, byte[] marker, CardFormat format,
         List<string> names, List<string> modIds)
     {
         // blob 起点 = 标记前 1 字节 7bit 长度前缀 + 前 4 字节 int32 loadProductNo
@@ -104,7 +142,7 @@ internal static class CharaCardParser
             throw new InvalidDataException("marker length prefix mismatch");
 
         // 坐标卡（ChaFileCoordinate）：无 Parameter/KKEx 块，mod 数据在文件尾 KKEx trailer
-        if (marker == ClothesMarker)
+        if (marker == format.ClothesMarker)
             return;
 
         var p = markerPos + marker.Length;
@@ -139,9 +177,9 @@ internal static class CharaCardParser
             }
             else
             {
-                var fullname = ReadFullname(seq);
-                if (!string.IsNullOrWhiteSpace(fullname))
-                    AddDistinct(names, fullname.Trim());
+                var name = ReadName(seq, format.NameKeys);
+                if (!string.IsNullOrWhiteSpace(name))
+                    AddDistinct(names, name);
             }
         }
     }
@@ -203,19 +241,26 @@ internal static class CharaCardParser
         return infos;
     }
 
-    /// <summary>Parameter/Parameter2 块：msgpack map（字符串键），取 "fullname" 的字符串值</summary>
-    private static string? ReadFullname(ReadOnlySequence<byte> seq)
+    /// <summary>
+    /// Parameter/Parameter2 块：msgpack map（字符串键），按 NameKeys 取字符串值并顺序拼接
+    /// （HS2 单键 "fullname"；KK/KKS "lastname"+"firstname"，基准 ChaFileParameter 字段）。
+    /// </summary>
+    private static string? ReadName(ReadOnlySequence<byte> seq, string[] nameKeys)
     {
         var reader = new MessagePackReader(seq);
         var mapCount = reader.ReadMapHeader();
+        var values = new string?[nameKeys.Length];
         for (var i = 0; i < mapCount; i++)
         {
             var key = reader.ReadString();
-            if (key == "fullname" && reader.NextMessagePackType == MessagePackType.String)
-                return reader.ReadString();
-            reader.Skip();
+            var idx = Array.IndexOf(nameKeys, key);
+            if (idx >= 0 && reader.NextMessagePackType == MessagePackType.String)
+                values[idx] = reader.ReadString();
+            else
+                reader.Skip();
         }
-        return null;
+        var name = string.Join(" ", values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!.Trim()));
+        return name == "" ? null : name;
     }
 
     // ==================== KKEx（块 + trailer 共用） ====================

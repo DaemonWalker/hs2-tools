@@ -31,7 +31,7 @@ public class CardExplorerViewModelTests : IDisposable
             TestAssets.ModMarker("g1"), TestAssets.ModMarker("g2"));
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.LocalMods["g1"] = new() { Name = "Owned" });
+        config.Update(s => s.Current.LocalMods["g1"] = new() { Name = "Owned" });
         var vm = MakeVm(config);
 
         vm.FilePath = card;
@@ -158,7 +158,7 @@ public class CardExplorerViewModelTests : IDisposable
         Assert.Equal(0, vm.ModLocalCount);
 
         // 其他窗口扫描完成 → LocalMods 变化 → "已拥有"标记刷新
-        config.Update(s => s.LocalMods["g2"] = new() { Name = "New" });
+        config.Update(s => s.Current.LocalMods["g2"] = new() { Name = "New" });
 
         Assert.Equal(1, vm.ModLocalCount);
         Assert.True(vm.ModItems.Single(i => i.Guid == "g2").IsLocal);

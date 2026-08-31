@@ -1,4 +1,5 @@
 using System.Text;
+using HS2Tools.Models;
 using HS2Tools.Services;
 using HS2Tools.ViewModels;
 
@@ -14,8 +15,8 @@ public class CharaWindowViewModelTests : IDisposable
     {
         var gameDir = Path.Combine(_dir, "game");
         Directory.CreateDirectory(Path.Combine(gameDir, "mods"));
-        Directory.CreateDirectory(Path.Combine(gameDir, ConfigService.CharaDirRelative));
-        File.WriteAllText(Path.Combine(gameDir, ConfigService.GameExeName), "exe");
+        Directory.CreateDirectory(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative));
+        File.WriteAllText(Path.Combine(gameDir, GameProfiles.Hs2.GameExeName), "exe");
         return gameDir;
     }
 
@@ -28,15 +29,15 @@ public class CharaWindowViewModelTests : IDisposable
     public void LoadCardPaths_ScansCharaDir()
     {
         var gameDir = MakeGameDir();
-        TestAssets.WritePng(Path.Combine(gameDir, ConfigService.CharaDirRelative), "c1.png",
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
             TestAssets.PngPrefix(), TestAssets.NameMarker("张三"));
-        TestAssets.WritePng(Path.Combine(gameDir, ConfigService.CharaDirRelative), "c2.png",
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c2.png",
             TestAssets.PngPrefix(), TestAssets.NameMarker("李四"));
-        File.WriteAllText(Path.Combine(gameDir, ConfigService.CharaDirRelative, "note.txt"), "x"); // 非 png 不收录
+        File.WriteAllText(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative, "note.txt"), "x"); // 非 png 不收录
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
-        var vm = MakeVm(config, new SideloadDatabaseService(_dir));
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
 
         vm.LoadCardPaths();
 
@@ -45,19 +46,57 @@ public class CharaWindowViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ConfigChanged_GameSwitch_RescansNewGameDir()
+    {
+        var hs2Dir = MakeGameDir();
+        TestAssets.WritePng(Path.Combine(hs2Dir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("张三"));
+        TestAssets.WritePng(Path.Combine(hs2Dir, GameProfiles.Hs2.CharaDirRelative), "c2.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("李四"));
+
+        // kk 目录：角色目录相对路径与 hs2 相同，仅 exe/游戏根不同
+        var kkDir = Path.Combine(_dir, "game-kk");
+        Directory.CreateDirectory(Path.Combine(kkDir, GameProfiles.Kk.CharaDirRelative));
+        File.WriteAllText(Path.Combine(kkDir, GameProfiles.Kk.GameExeName), "exe");
+        TestAssets.WritePng(Path.Combine(kkDir, GameProfiles.Kk.CharaDirRelative), "k1.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("王五"));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => { s.CurrentGame = "hs2"; s.Current.GamePath = hs2Dir; });
+        config.Update(s => { s.CurrentGame = "kk"; s.Current.GamePath = kkDir; });
+        config.Update(s => s.CurrentGame = "hs2");
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+
+        vm.LoadCardPaths();
+        Assert.Equal(2, vm.AllPaths.Count);
+
+        // 非游戏切换的 Changed（收藏）不重扫
+        var before = vm.AllPaths;
+        config.Update(s => s.Current.Favorites.Add(before[0]));
+        Assert.Same(before, vm.AllPaths);
+
+        // 切换游戏 → 用新游戏目录重扫，旧选中清空
+        vm.SelectedPath = before[0];
+        config.Update(s => s.CurrentGame = "kk"); // 测试环境 UiDispatch 同步执行
+        Assert.Null(vm.SelectedPath);
+        Assert.Single(vm.AllPaths);
+        Assert.EndsWith("k1.png", vm.AllPaths[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task LoadDetail_ParsesNamesModsAndRealFileInfo()
     {
         var gameDir = MakeGameDir();
-        var card = TestAssets.WritePng(Path.Combine(gameDir, ConfigService.CharaDirRelative), "c1.png",
+        var card = TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
             TestAssets.PngPrefix(), TestAssets.NameMarker("张三"), TestAssets.ModMarker("g1"), TestAssets.ModMarker("g2"));
 
         using var config = new ConfigService(_dir);
         config.Update(s =>
         {
-            s.GamePath = gameDir;
-            s.LocalMods["g1"] = new() { Name = "Owned Mod" };
+            s.Current.GamePath = gameDir;
+            s.Current.LocalMods["g1"] = new() { Name = "Owned Mod" };
         });
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string> { ["g2"] = "a/g2.zipmod" }); // g1 本地拥有；g2 有链接
         var vm = MakeVm(config, db);
 
@@ -82,12 +121,12 @@ public class CharaWindowViewModelTests : IDisposable
     public async Task LoadDetail_NoNames_FallsBackToUnknown()
     {
         var gameDir = MakeGameDir();
-        var card = TestAssets.WritePng(Path.Combine(gameDir, ConfigService.CharaDirRelative), "c1.png",
+        var card = TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
             TestAssets.PngPrefix());
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
-        var vm = MakeVm(config, new SideloadDatabaseService(_dir));
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
 
         vm.SelectedPath = card;
         await vm.Detail.LoadTask!;
@@ -100,7 +139,7 @@ public class CharaWindowViewModelTests : IDisposable
     public async Task DownloadAllMissing_DownloadsUrlAvailableOnly()
     {
         var gameDir = MakeGameDir();
-        var card = TestAssets.WritePng(Path.Combine(gameDir, ConfigService.CharaDirRelative), "c1.png",
+        var card = TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
             TestAssets.PngPrefix(), TestAssets.ModMarker("g-a"), TestAssets.ModMarker("g-b"), TestAssets.ModMarker("g-c"));
 
         using var server = new TestHttpServer();
@@ -110,8 +149,8 @@ public class CharaWindowViewModelTests : IDisposable
         server.MapFile("/m/g-b.zipmod", zipBytes);
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
-        var db = new SideloadDatabaseService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string>
         {
             ["g-a"] = "m/g-a.zipmod",
@@ -120,6 +159,7 @@ public class CharaWindowViewModelTests : IDisposable
         });
         var downloads = new DownloadManager(null, server.BaseUrl);
         var vm = MakeVm(config, db, downloads);
+        vm.Detail.DownloadBaseUrlOverride = server.BaseUrl; // 下载指向本地测试服务器
 
         vm.SelectedPath = card;
         await vm.Detail.LoadTask!;
@@ -134,7 +174,7 @@ public class CharaWindowViewModelTests : IDisposable
             await Task.Delay(50);
         }
 
-        var outDir = Path.Combine(gameDir, ConfigService.ModDownloadDirRelative);
+        var outDir = Path.Combine(gameDir, GameProfiles.Hs2.ModDownloadDirRelative);
         Assert.True(File.Exists(Path.Combine(outDir, "g-a.zipmod")));
         Assert.True(File.Exists(Path.Combine(outDir, "g-b.zipmod")));
         Assert.False(File.Exists(Path.Combine(outDir, "g-c.zipmod")));
@@ -148,7 +188,7 @@ public class CharaWindowViewModelTests : IDisposable
     public async Task DownloadMod_StartsTask_AndItemShowsDownloading()
     {
         var gameDir = MakeGameDir();
-        var card = TestAssets.WritePng(Path.Combine(gameDir, ConfigService.CharaDirRelative), "c1.png",
+        var card = TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
             TestAssets.PngPrefix(), TestAssets.ModMarker("g-a"));
 
         using var server = new TestHttpServer();
@@ -157,11 +197,12 @@ public class CharaWindowViewModelTests : IDisposable
         server.MapSlow("/m/g-a.zipmod", zipBytes, chunkSize: 10, delayMs: 30); // 慢速保证能观察到下载中
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
-        var db = new SideloadDatabaseService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string> { ["g-a"] = "m/g-a.zipmod" });
         var downloads = new DownloadManager(null, server.BaseUrl);
         var vm = MakeVm(config, db, downloads);
+        vm.Detail.DownloadBaseUrlOverride = server.BaseUrl; // 下载指向本地测试服务器
 
         vm.SelectedPath = card;
         await vm.Detail.LoadTask!;

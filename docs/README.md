@@ -1,6 +1,6 @@
 # HS2-Tools 项目文档
 
-HS2-Tools 是一个基于 **.NET 8 + WPF** 的 Windows 桌面应用，用于管理 HoneySelect2 游戏的模组、角色卡和场景。本目录提供项目的完整技术说明。
+HS2-Tools 是一个基于 **.NET 8 + WPF** 的 Windows 桌面应用，用于管理 Honey Select 2、恋活（KK）、恋活 Sunshine（KKS）游戏的模组、角色卡和场景。本目录提供项目的完整技术说明。
 
 ## 文档导航
 

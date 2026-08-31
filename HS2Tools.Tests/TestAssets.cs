@@ -54,7 +54,7 @@ internal static class TestAssets
         return ms.ToArray();
     }
 
-    /// <summary>带角色名标记的游戏数据</summary>
+    /// <summary>带角色名标记的游戏数据（HS2 回退模式：fullname..personality）</summary>
     public static byte[] NameMarker(string name)
     {
         using var ms = new MemoryStream();
@@ -64,6 +64,24 @@ internal static class TestAssets
         ms.Write(Encoding.UTF8.GetBytes(name));
         ms.WriteByte(0x0D);
         ms.Write("personality"u8.ToArray());
+        ms.WriteByte(0x02);
+        return ms.ToArray();
+    }
+
+    /// <summary>带角色名标记的游戏数据（KK 回退模式：lastname..firstname 与 firstname..nickname 两段）</summary>
+    public static byte[] KkNameMarker(string lastName, string firstName)
+    {
+        using var ms = new MemoryStream();
+        ms.WriteByte(0x01);
+        ms.Write("lastname"u8.ToArray());
+        ms.WriteByte(0x0A);
+        ms.Write(Encoding.UTF8.GetBytes(lastName));
+        ms.WriteByte(0x0D);
+        ms.Write("firstname"u8.ToArray());
+        ms.WriteByte(0x0A);
+        ms.Write(Encoding.UTF8.GetBytes(firstName));
+        ms.WriteByte(0x0D);
+        ms.Write("nickname"u8.ToArray());
         ms.WriteByte(0x02);
         return ms.ToArray();
     }
@@ -93,13 +111,32 @@ internal static class TestAssets
     public static byte[] BuildCharaDataRegion(string[] names, string[] guids, string[]? otherPluginGuids = null)
         => BuildCharaBlob(names, guids, otherPluginGuids);
 
+    /// <summary>合成 KK 角色卡数据区：【KoiKatuChara】头 + Parameter(lastname/firstname) + KKEx 块</summary>
+    public static byte[] BuildKkCharaDataRegion(string lastName, string firstName, string[] guids)
+        => BuildKkCharaBlob(lastName, firstName, guids);
+
+    /// <summary>合成混合数据区：HS2 角色 blob + KK 角色 blob（场景内嵌多游戏 blob 情形）</summary>
+    public static byte[] BuildMixedCharaDataRegion(
+        string hs2Name, string[] hs2Guids, string kkLastName, string kkFirstName, string[] kkGuids)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(BuildCharaBlob(new[] { hs2Name }, hs2Guids));
+        ms.Write(BuildKkCharaBlob(kkLastName, kkFirstName, kkGuids));
+        return ms.ToArray();
+    }
+
     /// <summary>合成坐标卡数据区：【AIS_Clothes】头 + 占位衣着数据 + 文件尾 KKEx trailer</summary>
-    public static byte[] BuildClothesDataRegion(string[] guids)
+    public static byte[] BuildClothesDataRegion(string[] guids) => BuildClothesDataRegion("【AIS_Clothes】", guids);
+
+    /// <summary>合成 KK 坐标卡数据区：【KoiKatuClothes】头 + 占位衣着数据 + 文件尾 KKEx trailer</summary>
+    public static byte[] BuildKkClothesDataRegion(string[] guids) => BuildClothesDataRegion("【KoiKatuClothes】", guids);
+
+    private static byte[] BuildClothesDataRegion(string marker, string[] guids)
     {
         using var ms = new MemoryStream();
         var bw = new BinaryWriter(ms);
         bw.Write(100);                 // loadProductNo
-        bw.Write("【AIS_Clothes】");   // 7bit 前缀标记
+        bw.Write(marker);              // 7bit 前缀标记
         bw.Write("1.0.0");             // version
         bw.Write(new byte[] { 1, 2, 3, 4 }); // 占位衣着数据
         bw.Flush();
@@ -118,7 +155,7 @@ internal static class TestAssets
         return ms.ToArray();
     }
 
-    /// <summary>单个 ChaFile blob（BinaryWriter 布局，与游戏序列化一致）</summary>
+    /// <summary>单个 HS2 ChaFile blob（BinaryWriter 布局，与游戏序列化一致）</summary>
     private static byte[] BuildCharaBlob(string[] names, string[] guids, string[]? otherPluginGuids = null)
     {
         var infos = new List<(string Name, byte[] Data)>();
@@ -127,7 +164,23 @@ internal static class TestAssets
         if (names.Length > 1)
             infos.Add(("Parameter2", BuildFullnameBlock(names[1])));
         infos.Add(("KKEx", BuildKkexBlock(guids, otherPluginGuids)));
+        return BuildBlob("【AIS_Chara】", infos);
+    }
 
+    /// <summary>单个 KK ChaFile blob：信封布局与 HS2 相同，标记【KoiKatuChara】，Parameter 用 lastname/firstname</summary>
+    private static byte[] BuildKkCharaBlob(string lastName, string firstName, string[] guids)
+    {
+        var infos = new List<(string Name, byte[] Data)>
+        {
+            ("Parameter", BuildKkNameBlock(lastName, firstName)),
+            ("KKEx", BuildKkexBlock(guids)),
+        };
+        return BuildBlob("【KoiKatuChara】", infos);
+    }
+
+    /// <summary>ChaFile blob 信封（BinaryWriter 布局，各游戏相同；差异仅在标记与块内容）</summary>
+    private static byte[] BuildBlob(string marker, List<(string Name, byte[] Data)> infos)
+    {
         // BlockHeader msgpack（BlockHeader 是 [MessagePackObject(true)] map；Info 是数组式 4 元素）
         var headerBuffer = new ArrayBufferWriter<byte>();
         {
@@ -152,7 +205,7 @@ internal static class TestAssets
         using var ms = new MemoryStream();
         var bw = new BinaryWriter(ms);
         bw.Write(100);               // loadProductNo
-        bw.Write("【AIS_Chara】");   // 7bit 前缀标记
+        bw.Write(marker);            // 7bit 前缀标记
         bw.Write("1.0.0");           // ChaFileVersion
         bw.Write(0);                 // lang
         bw.Write("user");            // userID
@@ -178,6 +231,22 @@ internal static class TestAssets
         w.Write(fullname);
         w.Write("personality");
         w.Write(12);
+        w.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>KK Parameter 块：msgpack map（字符串键），含 lastname/firstname + 干扰键（无 fullname）</summary>
+    private static byte[] BuildKkNameBlock(string lastName, string firstName)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var w = new MessagePackWriter(buffer);
+        w.WriteMapHeader(3);
+        w.Write("lastname");
+        w.Write(lastName);
+        w.Write("firstname");
+        w.Write(firstName);
+        w.Write("nickname");
+        w.Write("昵称");
         w.Flush();
         return buffer.WrittenSpan.ToArray();
     }

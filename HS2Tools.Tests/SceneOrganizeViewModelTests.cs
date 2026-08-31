@@ -1,3 +1,4 @@
+using HS2Tools.Models;
 using HS2Tools.Services;
 using HS2Tools.ViewModels;
 
@@ -12,13 +13,13 @@ public class SceneOrganizeViewModelTests : IDisposable
     private string MakeGameDir()
     {
         var gameDir = Path.Combine(_dir, "game");
-        Directory.CreateDirectory(Path.Combine(gameDir, ConfigService.SceneDirRelative));
-        File.WriteAllText(Path.Combine(gameDir, ConfigService.GameExeName), "exe");
+        Directory.CreateDirectory(Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative));
+        File.WriteAllText(Path.Combine(gameDir, GameProfiles.Hs2.GameExeName), "exe");
         return gameDir;
     }
 
     private string WriteScene(string gameDir, string fileName, string charaName) =>
-        TestAssets.WritePng(Path.Combine(gameDir, ConfigService.SceneDirRelative), fileName,
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative), fileName,
             TestAssets.PngPrefix(), TestAssets.NameMarker(charaName));
 
     [Fact]
@@ -70,7 +71,7 @@ public class SceneOrganizeViewModelTests : IDisposable
         var noMatch = WriteScene(gameDir, "s3.png", "其他人");
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
+        config.Update(s => s.Current.GamePath = gameDir);
         var vm = new SceneOrganizeViewModel(config, new ScannerService())
         {
             CharInput = "艾尔", // 子串匹配（原版 includes）
@@ -91,7 +92,7 @@ public class SceneOrganizeViewModelTests : IDisposable
         Assert.Equal(1, completed);
 
         // 修复原版：移动到 hs_tools_<文件夹>/<文件名>（原版恒失败）
-        var targetDir = Path.Combine(gameDir, ConfigService.SceneDirRelative, "hs_tools_艾尔合集");
+        var targetDir = Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative, "hs_tools_艾尔合集");
         Assert.True(File.Exists(Path.Combine(targetDir, "s1.png")));
         Assert.True(File.Exists(Path.Combine(targetDir, "s2.png")));
         Assert.False(File.Exists(match1));
@@ -105,12 +106,12 @@ public class SceneOrganizeViewModelTests : IDisposable
         var gameDir = MakeGameDir();
         WriteScene(gameDir, "s1.png", "艾尔莎");
         // 已整理目录中的场景不应参与再次整理
-        var organizedDir = Path.Combine(gameDir, ConfigService.SceneDirRelative, "hs_tools_已有");
+        var organizedDir = Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative, "hs_tools_已有");
         Directory.CreateDirectory(organizedDir);
         TestAssets.WritePng(organizedDir, "old.png", TestAssets.PngPrefix(), TestAssets.NameMarker("艾尔莎"));
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
+        config.Update(s => s.Current.GamePath = gameDir);
         var vm = new SceneOrganizeViewModel(config, new ScannerService())
         {
             CharInput = "艾尔",
@@ -131,7 +132,7 @@ public class SceneOrganizeViewModelTests : IDisposable
         WriteScene(gameDir, "s1.png", "无关角色");
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
+        config.Update(s => s.Current.GamePath = gameDir);
         var vm = new SceneOrganizeViewModel(config, new ScannerService())
         {
             CharInput = "不存在的角色",
@@ -152,7 +153,7 @@ public class SceneOrganizeViewModelTests : IDisposable
         WriteScene(gameDir, "s2.png", "角色乙");
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
+        config.Update(s => s.Current.GamePath = gameDir);
         var vm = new SceneOrganizeViewModel(config, new ScannerService())
         {
             CharInput = "角色甲",
@@ -201,9 +202,9 @@ public class SceneOrganizeViewModelTests : IDisposable
         WriteScene(gameDir, "s2.png", "其他人");
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
+        config.Update(s => s.Current.GamePath = gameDir);
         var vm = new SceneWindowViewModel(config, new ScannerService(),
-            new DownloadManager(), new SideloadDatabaseService(_dir), new GameLauncherService(config));
+            new DownloadManager(), new SideloadDatabaseService(config), new GameLauncherService(config));
         vm.LoadCardPaths();
         Assert.Equal(2, vm.AllPaths.Count);
 

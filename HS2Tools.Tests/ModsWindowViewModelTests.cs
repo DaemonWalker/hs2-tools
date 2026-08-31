@@ -13,8 +13,8 @@ public class ModsWindowViewModelTests : IDisposable
     private string MakeGameDir()
     {
         var gameDir = Path.Combine(_dir, "game");
-        Directory.CreateDirectory(Path.Combine(gameDir, ConfigService.ModsDirRelative));
-        File.WriteAllText(Path.Combine(gameDir, ConfigService.GameExeName), "exe");
+        Directory.CreateDirectory(Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative));
+        File.WriteAllText(Path.Combine(gameDir, GameProfiles.Hs2.GameExeName), "exe");
         return gameDir;
     }
 
@@ -27,11 +27,11 @@ public class ModsWindowViewModelTests : IDisposable
         using var config = new ConfigService(_dir);
         config.Update(s =>
         {
-            s.LocalMods["g1"] = new ModInfo { Name = "M1" };
-            s.LocalMods["g2"] = new ModInfo { Name = "M2" };
-            s.LocalMods["g3"] = new ModInfo { Name = "M3" };
-            s.ModUsage["g1"] = 2;
-            s.ModUsage["g-other"] = 3; // 本地不存在也计入统计（与首页口径一致）
+            s.Current.LocalMods["g1"] = new ModInfo { Name = "M1" };
+            s.Current.LocalMods["g2"] = new ModInfo { Name = "M2" };
+            s.Current.LocalMods["g3"] = new ModInfo { Name = "M3" };
+            s.Current.ModUsage["g1"] = 2;
+            s.Current.ModUsage["g-other"] = 3; // 本地不存在也计入统计（与首页口径一致）
         });
 
         var vm = MakeVm(config);
@@ -49,11 +49,11 @@ public class ModsWindowViewModelTests : IDisposable
         using var config = new ConfigService(_dir);
         config.Update(s =>
         {
-            s.LocalMods["G-ABC"] = new ModInfo { Name = "Upper", Version = "1.0", Path = @"mods\a.zipmod" };
-            s.LocalMods["g-def"] = new ModInfo { Name = "Lower" };
-            s.LocalMods["g-none"] = new ModInfo { Name = "NoUse" };
-            s.ModUsage["g-abc"] = 5; // 大小写不同也命中（原版 toLowerCase 匹配）
-            s.ModUsage["G-DEF"] = 1;
+            s.Current.LocalMods["G-ABC"] = new ModInfo { Name = "Upper", Version = "1.0", Path = @"mods\a.zipmod" };
+            s.Current.LocalMods["g-def"] = new ModInfo { Name = "Lower" };
+            s.Current.LocalMods["g-none"] = new ModInfo { Name = "NoUse" };
+            s.Current.ModUsage["g-abc"] = 5; // 大小写不同也命中（原版 toLowerCase 匹配）
+            s.Current.ModUsage["G-DEF"] = 1;
         });
 
         var vm = MakeVm(config);
@@ -69,9 +69,9 @@ public class ModsWindowViewModelTests : IDisposable
         using var config = new ConfigService(_dir);
         config.Update(s =>
         {
-            s.LocalMods["g-b"] = new ModInfo();
-            s.LocalMods["g-a"] = new ModInfo { Version = "2.0" };
-            s.LocalMods["G-A"] = new ModInfo { Version = "1.0" }; // guid 排序大小写不敏感，版本再分先后
+            s.Current.LocalMods["g-b"] = new ModInfo();
+            s.Current.LocalMods["g-a"] = new ModInfo { Version = "2.0" };
+            s.Current.LocalMods["G-A"] = new ModInfo { Version = "1.0" }; // guid 排序大小写不敏感，版本再分先后
         });
 
         var vm = MakeVm(config);
@@ -85,9 +85,9 @@ public class ModsWindowViewModelTests : IDisposable
         using var config = new ConfigService(_dir);
         config.Update(s =>
         {
-            s.LocalMods["g-used"] = new ModInfo();
-            s.LocalMods["g-unused"] = new ModInfo();
-            s.ModUsage["g-used"] = 1;
+            s.Current.LocalMods["g-used"] = new ModInfo();
+            s.Current.LocalMods["g-unused"] = new ModInfo();
+            s.Current.ModUsage["g-used"] = 1;
         });
         var vm = MakeVm(config);
 
@@ -99,7 +99,7 @@ public class ModsWindowViewModelTests : IDisposable
         // 筛选后无结果时的空态文案
         vm.ShowUnusedOnly = false;
         vm.ShowUnusedOnly = true;
-        config.Update(s => s.ModUsage["g-unused"] = 9); // Changed → Reload：两个 Mod 均被引用
+        config.Update(s => s.Current.ModUsage["g-unused"] = 9); // Changed → Reload：两个 Mod 均被引用
         Assert.True(vm.IsEmpty);
         Assert.Equal("没有未使用的 Mods", vm.EmptyText);
 
@@ -121,7 +121,7 @@ public class ModsWindowViewModelTests : IDisposable
     public async Task Refresh_RescansModsDir_AndUpdatesConfig()
     {
         var gameDir = MakeGameDir();
-        var modsDir = Path.Combine(gameDir, ConfigService.ModsDirRelative);
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
         TestAssets.WriteZipmod(modsDir, "m1.zipmod", TestAssets.MakeManifest("g-new", "New Mod", "1.2.3"));
         TestAssets.WriteZipmod(modsDir, "m2.zipmod", TestAssets.MakeManifest("g-other", "Other Mod"));
         File.WriteAllText(Path.Combine(modsDir, "note.txt"), "x"); // 非 zipmod 不收录
@@ -129,8 +129,8 @@ public class ModsWindowViewModelTests : IDisposable
         using var config = new ConfigService(_dir);
         config.Update(s =>
         {
-            s.GamePath = gameDir;
-            s.LocalMods["g-stale"] = new ModInfo { Name = "Stale" }; // 旧扫描结果应被整体替换
+            s.Current.GamePath = gameDir;
+            s.Current.LocalMods["g-stale"] = new ModInfo { Name = "Stale" }; // 旧扫描结果应被整体替换
         });
         var vm = MakeVm(config);
         Assert.Equal(1, vm.ModCount);
@@ -138,11 +138,11 @@ public class ModsWindowViewModelTests : IDisposable
         Assert.True(vm.RefreshCommand.CanExecute(null));
         await vm.RefreshCommand.ExecuteAsync(null);
 
-        // Config.Settings.LocalMods 被重扫结果替换（对应原版 scanMods → setMods）
-        Assert.False(config.Settings.LocalMods.ContainsKey("g-stale"));
-        Assert.Equal(2, config.Settings.LocalMods.Count);
-        Assert.Equal("New Mod", config.Settings.LocalMods["g-new"].Name);
-        Assert.Equal("1.2.3", config.Settings.LocalMods["g-new"].Version);
+        // Config.Settings.Current.LocalMods 被重扫结果替换（对应原版 scanMods → setMods）
+        Assert.False(config.Settings.Current.LocalMods.ContainsKey("g-stale"));
+        Assert.Equal(2, config.Settings.Current.LocalMods.Count);
+        Assert.Equal("New Mod", config.Settings.Current.LocalMods["g-new"].Name);
+        Assert.Equal("1.2.3", config.Settings.Current.LocalMods["g-new"].Version);
 
         // Changed 事件驱动列表与统计刷新
         Assert.Equal(2, vm.ModCount);
@@ -167,12 +167,12 @@ public class ModsWindowViewModelTests : IDisposable
     public async Task Refresh_NoGamePath_ClearsLocalMods()
     {
         using var config = new ConfigService(_dir);
-        config.Update(s => s.LocalMods["g1"] = new ModInfo()); // 未设置 GamePath
+        config.Update(s => s.Current.LocalMods["g1"] = new ModInfo()); // 未设置 GamePath
         var vm = MakeVm(config);
 
         await vm.RefreshCommand.ExecuteAsync(null);
 
-        Assert.Empty(config.Settings.LocalMods);
+        Assert.Empty(config.Settings.Current.LocalMods);
         Assert.True(vm.IsEmpty);
     }
 
@@ -186,8 +186,8 @@ public class ModsWindowViewModelTests : IDisposable
         // 模拟其他窗口完成分析（Changed 事件在调用线程触发，测试环境 UiDispatch 直跑）
         config.Update(s =>
         {
-            s.LocalMods["g1"] = new ModInfo { Name = "M1" };
-            s.ModUsage["g1"] = 4;
+            s.Current.LocalMods["g1"] = new ModInfo { Name = "M1" };
+            s.Current.ModUsage["g1"] = 4;
         });
 
         Assert.Equal(1, vm.ModCount);

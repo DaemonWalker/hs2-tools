@@ -18,8 +18,8 @@ public class SideloadWindowViewModelTests : IDisposable
     private string MakeGameDir()
     {
         var gameDir = Path.Combine(_dir, "game");
-        Directory.CreateDirectory(Path.Combine(gameDir, ConfigService.ModsDirRelative));
-        File.WriteAllText(Path.Combine(gameDir, ConfigService.GameExeName), "exe");
+        Directory.CreateDirectory(Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative));
+        File.WriteAllText(Path.Combine(gameDir, GameProfiles.Hs2.GameExeName), "exe");
         return gameDir;
     }
 
@@ -43,7 +43,7 @@ public class SideloadWindowViewModelTests : IDisposable
     {
         // 阶段 4 验证点：真实 sideload.zip（12k+ 条目）下建行与搜索过滤的耗时
         using var config = new ConfigService(_dir);
-        var db = new SideloadDatabaseService(_dir); // 无用户库 → 内嵌全量库
+        var db = new SideloadDatabaseService(config); // 无用户库 → 内嵌全量库
         Assert.True(db.Database.Count > 10_000);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -66,8 +66,8 @@ public class SideloadWindowViewModelTests : IDisposable
     public void Stats_TotalExistingMissing()
     {
         using var config = new ConfigService(_dir);
-        config.Update(s => s.LocalMods["g-owned"] = new ModInfo());
-        var db = new SideloadDatabaseService(_dir);
+        config.Update(s => s.Current.LocalMods["g-owned"] = new ModInfo());
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string>
         {
             ["g-owned"] = "a/g-owned.zipmod",
@@ -100,7 +100,7 @@ public class SideloadWindowViewModelTests : IDisposable
     public void ApplyFilter_FiltersByGuidAndUrl()
     {
         using var config = new ConfigService(_dir);
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string>
         {
             ["g-aaa"] = "pack1/a.zipmod",
@@ -127,7 +127,7 @@ public class SideloadWindowViewModelTests : IDisposable
     public async Task SearchText_DebouncesFilter()
     {
         using var config = new ConfigService(_dir);
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string>
         {
             ["g-aaa"] = "a.zipmod",
@@ -147,7 +147,7 @@ public class SideloadWindowViewModelTests : IDisposable
     public async Task SearchText_RapidChanges_OnlyLastApplies()
     {
         using var config = new ConfigService(_dir);
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string>
         {
             ["g-aaa"] = "a.zipmod",
@@ -173,11 +173,12 @@ public class SideloadWindowViewModelTests : IDisposable
         server.MapSlow("/m/g-a.zipmod", zipBytes, chunkSize: 10, delayMs: 30); // 慢速保证能观察到下载中
 
         using var config = new ConfigService(_dir);
-        config.Update(s => s.GamePath = gameDir);
-        var db = new SideloadDatabaseService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string> { ["g-a"] = "m/g-a.zipmod" });
         var downloads = new DownloadManager(null, server.BaseUrl);
         var vm = MakeVm(config, db, downloads);
+        vm.DownloadBaseUrlOverride = server.BaseUrl; // 下载指向本地测试服务器
 
         var item = vm.Items.Single();
         vm.DownloadCommand.Execute(item);
@@ -187,7 +188,7 @@ public class SideloadWindowViewModelTests : IDisposable
 
         await WaitFor(() => item.TaskStatus == DownloadTaskStatus.Completed);
 
-        var outFile = Path.Combine(gameDir, ConfigService.ModDownloadDirRelative, "g-a.zipmod");
+        var outFile = Path.Combine(gameDir, GameProfiles.Hs2.ModDownloadDirRelative, "g-a.zipmod");
         Assert.True(File.Exists(outFile));
         Assert.Equal("已下载", item.StatusText); // 完成但未重扫入 LocalMods
         Assert.Equal("已完成", item.DownloadText);
@@ -198,7 +199,7 @@ public class SideloadWindowViewModelTests : IDisposable
     public void Download_NoGamePath_DoesNothing()
     {
         using var config = new ConfigService(_dir); // 未设置 GamePath → 无下载目录
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string> { ["g-a"] = "m/g-a.zipmod" });
         var downloads = new DownloadManager();
         var vm = MakeVm(config, db, downloads);
@@ -212,7 +213,7 @@ public class SideloadWindowViewModelTests : IDisposable
     public void DbChanged_ReloadsItemsAndStats()
     {
         using var config = new ConfigService(_dir);
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string> { ["g-a"] = "a.zipmod" });
         var vm = MakeVm(config, db);
         Assert.Equal(1, vm.TotalCount);
@@ -233,7 +234,7 @@ public class SideloadWindowViewModelTests : IDisposable
     public void Empty_NoDatabase_ShowsHint()
     {
         using var config = new ConfigService(_dir);
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string>()); // 显式空库（不走内嵌库）
         var vm = MakeVm(config, db);
 
@@ -246,7 +247,7 @@ public class SideloadWindowViewModelTests : IDisposable
     public void Empty_FilterNoMatch_ShowsHint()
     {
         using var config = new ConfigService(_dir);
-        var db = new SideloadDatabaseService(_dir);
+        var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string> { ["g-a"] = "a.zipmod" });
         var vm = MakeVm(config, db);
 

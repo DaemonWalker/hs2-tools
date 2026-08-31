@@ -268,6 +268,46 @@ public class ScannerTests : IDisposable
     }
 
     [Fact]
+    public void ReadPngNames_KkCharaCard_StructuralParse()
+    {
+        // KK 角色卡按卡头标记自动识别：不依赖"当前游戏"状态，结构解析直接出拼接名
+        var path = TestAssets.WritePng(_dir, "kk.png",
+            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegion("白峰", "一乃", new[] { "com.kk.mod" }));
+        Assert.Equal(new[] { "白峰 一乃" }, _svc.ReadPngNames(path));
+        Assert.Equal(new[] { "com.kk.mod" }, _svc.ReadPngMods(path));
+    }
+
+    [Fact]
+    public void ReadPngNames_KkPattern_FallsBackToKkByteScan()
+    {
+        // 无结构标记的 KK 字节模式：HS2 模式（fullname..personality）无结果，
+        // 回退 KK 模式（lastname..firstname / firstname..nickname 两段合并）
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.KkNameMarker("白峰", "一乃"));
+        var names = _svc.ReadPngNames(path);
+        Assert.Equal(new[] { "白峰", "一乃" }, names);
+    }
+
+    [Fact]
+    public void ReadPngNames_Hs2PatternHits_KkFallbackSkipped()
+    {
+        // HS2 模式有结果时不再尝试 KK 模式（优先 fullname）
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("HS2角色"), TestAssets.KkNameMarker("白峰", "一乃"));
+        var names = _svc.ReadPngNames(path);
+        Assert.Equal(new[] { "HS2角色" }, names);
+    }
+
+    [Fact]
+    public void ReadPngNames_NoIend_KkPattern_WholeFileFallback()
+    {
+        // 无 IEND（非卡片文件）：整体视作数据区回退扫描，KK 模式同样生效
+        var path = TestAssets.WritePng(_dir, "card.png", TestAssets.KkNameMarker("白峰", "一乃"));
+        var names = _svc.ReadPngNames(path);
+        Assert.Equal(new[] { "白峰", "一乃" }, names);
+    }
+
+    [Fact]
     public void ReadPngMods_CorruptedBlob_NoThrow_FallsBack()
     {
         // 有【AIS_Chara】标记但 blob 损坏（长度前缀对、后续全是垃圾）→ 不抛，回退字节扫描

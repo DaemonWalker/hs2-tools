@@ -38,8 +38,9 @@ public class DownloadManager
     /// <summary>
     /// 触发下载。同名任务正在下载时拒绝重复触发（返回 false），
     /// 避免原版覆盖 activeDownloads 条目导致旧任务失控的问题。
+    /// baseUrl 为空时用构造默认值；多游戏场景由调用方传当前游戏档案的 SideloadBaseUrl。
     /// </summary>
-    public bool StartDownload(string name, string relativeUrl, string dir)
+    public bool StartDownload(string name, string relativeUrl, string dir, string? baseUrl = null)
     {
         if (_tasks.TryGetValue(name, out var existing) && existing.Status == DownloadTaskStatus.Downloading)
             return false;
@@ -47,7 +48,7 @@ public class DownloadManager
         var task = new DownloadTask
         {
             Id = name,
-            Url = _baseUrl + relativeUrl,
+            Url = (baseUrl ?? _baseUrl) + relativeUrl,
             OutputPath = Path.Combine(dir, name + ".zipmod"),
             Status = DownloadTaskStatus.Downloading,
             Cts = new CancellationTokenSource(),

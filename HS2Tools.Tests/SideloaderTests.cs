@@ -212,6 +212,13 @@ public class SideloaderTests : IDisposable
         });
     }
 
+    [Fact]
+    public void LoadBundledDatabase_NonHs2Source_ReturnsEmpty()
+    {
+        // 内嵌库只有 HS2 一份；kkec 等数据源由用户爬虫更新落盘
+        Assert.Empty(SideloaderService.LoadBundledDatabase("kkec"));
+    }
+
     // ==================== 真实站点验证（阶段 1 验收：需 HS2TOOLS_REAL_CRAWL=1） ====================
 
     [SkippableFact]

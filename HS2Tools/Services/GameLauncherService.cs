@@ -16,15 +16,15 @@ public class GameLauncherService
         _config = config;
     }
 
-    /// <summary>启动游戏（HoneySelect2.exe，工作目录 = 游戏目录）</summary>
-    public void LaunchGame() => Launch(ConfigService.GameExeName);
+    /// <summary>启动当前游戏（exe 名取当前 GameProfile，工作目录 = 游戏目录）</summary>
+    public void LaunchGame() => Launch(_config.CurrentProfile.GameExeName);
 
-    /// <summary>启动工作室（StudioNEOV2.exe）</summary>
-    public void LaunchStudio() => Launch(ConfigService.StudioExeName);
+    /// <summary>启动当前游戏的工作室</summary>
+    public void LaunchStudio() => Launch(_config.CurrentProfile.StudioExeName);
 
     private void Launch(string exeName)
     {
-        var gamePath = _config.Settings.GamePath;
+        var gamePath = _config.Settings.Current.GamePath;
         if (string.IsNullOrEmpty(gamePath))
             throw new InvalidOperationException("游戏路径未设置");
 

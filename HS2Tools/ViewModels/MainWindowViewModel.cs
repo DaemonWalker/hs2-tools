@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HS2Tools.Models;
@@ -5,6 +6,19 @@ using HS2Tools.Services;
 using Microsoft.Win32;
 
 namespace HS2Tools.ViewModels;
+
+/// <summary>顶部游戏切换器的一项（当前游戏高亮且禁用）</summary>
+public partial class GameSwitchItemViewModel : ObservableObject
+{
+    public required GameProfile Profile { get; init; }
+
+    public string Id => Profile.Id;
+    public string DisplayName => Profile.DisplayName;
+
+    /// <summary>当前生效游戏</summary>
+    [ObservableProperty]
+    private bool _isCurrent;
+}
 
 /// <summary>Sideloader 更新区块的 UI 状态（对应原版 sideloadUpdateStatus）</summary>
 public enum SideloaderUiState
@@ -35,6 +49,9 @@ public partial class MainWindowViewModel : ObservableObject
     private ISideloaderService? _currentSideloader;
     private bool _stopRequested;
 
+    /// <summary>已按之加载的游戏 ID（Changed 时与 Settings.CurrentGame 比较，识别"游戏被切换"）</summary>
+    private string _loadedGameId;
+
     public MainWindowViewModel(
         ConfigService config,
         ScannerService scanner,
@@ -50,16 +67,75 @@ public partial class MainWindowViewModel : ObservableObject
         _sideloadDb = sideloadDb;
         _sideloaderFactory = sideloaderFactory;
 
-        GamePath = config.Settings.GamePath; // setter 链触发校验
+        _loadedGameId = config.Settings.CurrentGame;
+        GameSwitchItems = new(GameProfiles.All.Select(p =>
+            new GameSwitchItemViewModel { Profile = p, IsCurrent = p.Id == _loadedGameId }));
+
+        GamePath = config.Settings.Current.GamePath; // setter 链触发校验
         RefreshStats();
 
-        // 其他窗口改配置（代理/收藏）或爬虫更新数据库后，统计与缺失数自行刷新
-        _config.Changed += (_, _) => UiDispatch.Run(RefreshStats);
+        // 其他窗口改配置（代理/收藏/切游戏）或爬虫更新数据库后，统计与缺失数自行刷新
+        _config.Changed += (_, _) => UiDispatch.Run(OnConfigChanged);
         _sideloadDb.Changed += (_, _) => UiDispatch.Run(RefreshStats);
     }
 
     /// <summary>请求用户确认停止爬虫（View 订阅弹确认框，确认后调 <see cref="ConfirmStopSideloader"/>）</summary>
     public event EventHandler? StopConfirmationRequested;
+
+    /// <summary>测试用：非 null 时覆盖下载 base URL（默认取当前游戏档案的 SideloadBaseUrl）</summary>
+    internal string? DownloadBaseUrlOverride;
+
+    // ==================== 游戏切换（顶部切换器；数据来自 GameProfiles.All） ====================
+
+    /// <summary>切换器按钮项（当前游戏 IsCurrent=true，UI 高亮且禁用）</summary>
+    public ObservableCollection<GameSwitchItemViewModel> GameSwitchItems { get; }
+
+    /// <summary>当前游戏档案（标题/路径卡片等文案绑定其 DisplayName/GameExeName）</summary>
+    public GameProfile CurrentProfile => _config.CurrentProfile;
+
+    /// <summary>扫描/爬虫进行中禁止切游戏：在飞任务持有旧游戏目录，结果会落错游戏</summary>
+    private bool CanSwitchGame() => !IsScanning && SideloaderState != SideloaderUiState.Running;
+
+    /// <summary>切换当前游戏（未知 ID 由 GameProfiles.Get 回退 HS2，与配置加载口径一致）</summary>
+    [RelayCommand(CanExecute = nameof(CanSwitchGame))]
+    private void SwitchGame(string? gameId)
+    {
+        if (string.IsNullOrEmpty(gameId) || gameId == _loadedGameId)
+            return;
+        _loadedGameId = gameId; // 先于 Update：Changed 回调据此判定为自己发起，不重复应用（无回环）
+        _config.Update(s => s.CurrentGame = gameId);
+        ApplyGameSwitch(gameId);
+    }
+
+    /// <summary>配置变化：游戏被别处切换时同步切换器与路径；其余变化（收藏/代理）只刷统计</summary>
+    private void OnConfigChanged()
+    {
+        if (_config.Settings.CurrentGame != _loadedGameId)
+            ApplyGameSwitch(_config.Settings.CurrentGame);
+        RefreshStats();
+    }
+
+    /// <summary>应用游戏切换：切换器高亮、重载该游戏 GamePath 并重校验、重置扫描展示、刷新统计</summary>
+    private void ApplyGameSwitch(string gameId)
+    {
+        _loadedGameId = gameId;
+        foreach (var item in GameSwitchItems)
+            item.IsCurrent = item.Id == gameId;
+        OnPropertyChanged(nameof(CurrentProfile));
+
+        // 扫描进度/结果属于旧游戏，重置展示（统计数据为各游戏独立存储，由 RefreshStats 重读）
+        ScanCompleted = false;
+        ScanStep = 0;
+        ModScanDone = SceneScanDone = CharaScanDone = false;
+        ModScanProgress = SceneScanProgress = CharaScanProgress = "";
+        ScanError = "";
+        LaunchStatusText = "";
+
+        var path = _config.Settings.Current.GamePath;
+        GamePath = path;           // setter 有 != 守卫：与已存值相同不会回写配置
+        ApplyPathValidation(path); // 路径串相同（setter 未触发）也要按新游戏 exe 重校验
+        RefreshStats();
+    }
 
     // ==================== 游戏路径 ====================
 
@@ -78,38 +154,46 @@ public partial class MainWindowViewModel : ObservableObject
 
     partial void OnGamePathChanged(string value)
     {
-        IsGamePathValid = ValidateGamePath(value);
-        PathStatusText = IsGamePathValid
-            ? $"已验证：找到 {ConfigService.GameExeName}"
-            : $"未找到 {ConfigService.GameExeName}，请选择游戏目录";
+        ApplyPathValidation(value);
 
         // 与已加载值相同则不重复写盘（避免每次启动重写配置文件）
-        if (value != _config.Settings.GamePath)
-            _config.Update(s => s.GamePath = value);
+        if (value != _config.Settings.Current.GamePath)
+            _config.Update(s => s.Current.GamePath = value);
+    }
+
+    /// <summary>按当前游戏 exe 校验路径并更新状态文案（切游戏后路径串不变时也需重跑）</summary>
+    private void ApplyPathValidation(string value)
+    {
+        IsGamePathValid = ValidateGamePath(value);
+        PathStatusText = IsGamePathValid
+            ? $"已验证：找到 {_config.CurrentProfile.GameExeName}"
+            : $"未找到 {_config.CurrentProfile.GameExeName}，请选择游戏目录";
     }
 
     /// <summary>选择游戏 exe（对应原版 SelectPath：选 exe 取目录）</summary>
     [RelayCommand]
     private void Browse()
     {
+        var exeName = _config.CurrentProfile.GameExeName;
         var dialog = new OpenFileDialog
         {
-            Title = $"选择 {ConfigService.GameExeName}",
-            Filter = $"{ConfigService.GameExeName}|{ConfigService.GameExeName}|可执行文件 (*.exe)|*.exe",
+            Title = $"选择 {exeName}",
+            Filter = $"{exeName}|{exeName}|可执行文件 (*.exe)|*.exe",
             CheckFileExists = true,
         };
         if (dialog.ShowDialog() == true)
             GamePath = Path.GetDirectoryName(dialog.FileName) ?? "";
     }
 
-    /// <summary>游戏路径校验：目录下存在 HoneySelect2.exe</summary>
-    public static bool ValidateGamePath(string? path) =>
-        !string.IsNullOrWhiteSpace(path) && File.Exists(Path.Combine(path, ConfigService.GameExeName));
+    /// <summary>游戏路径校验：目录下存在当前游戏的 exe</summary>
+    public bool ValidateGamePath(string? path) =>
+        !string.IsNullOrWhiteSpace(path) && File.Exists(Path.Combine(path, _config.CurrentProfile.GameExeName));
 
     // ==================== 数据分析（对应原版 Scan：顺序 scanMods → scanScene → scanFemale） ====================
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SwitchGameCommand))]
     [NotifyPropertyChangedFor(nameof(ScanButtonText))]
     private bool _isScanning;
 
@@ -166,8 +250,8 @@ public partial class MainWindowViewModel : ObservableObject
 
             _config.Update(s =>
             {
-                s.LocalMods = mods;
-                s.ModUsage = mergedUsage;
+                s.Current.LocalMods = mods;
+                s.Current.ModUsage = mergedUsage;
             });
             ScanCompleted = true;
         }
@@ -251,6 +335,7 @@ public partial class MainWindowViewModel : ObservableObject
     // ==================== Sideloader 更新（运行/停止；完成后结果落盘——修复原版更新不生效） ====================
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SwitchGameCommand))]
     [NotifyPropertyChangedFor(nameof(SideloaderButtonText))]
     [NotifyPropertyChangedFor(nameof(IsSideloaderRunning))]
     [NotifyPropertyChangedFor(nameof(SideloaderSucceeded))]
@@ -386,8 +471,8 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>缺失清单：被引用但本地不存在、且 sideload 库中有的 guid（原版 SideloadInit 的 downloadList）</summary>
     private List<(string Guid, string Url)> ComputeMissingMods()
     {
-        var usage = _config.Settings.ModUsage;
-        var localMods = _config.Settings.LocalMods;
+        var usage = _config.Settings.Current.ModUsage;
+        var localMods = _config.Settings.Current.LocalMods;
         var db = _sideloadDb.Database;
         return usage.Keys
             .Where(guid => !localMods.ContainsKey(guid) && db.ContainsKey(guid))
@@ -433,7 +518,8 @@ public partial class MainWindowViewModel : ObservableObject
                 try
                 {
                     // 同名任务正在下载时 StartDownload 返回 false——等待在途任务完成即可
-                    _downloads.StartDownload(guid, url, dir);
+                    _downloads.StartDownload(guid, url, dir,
+                        DownloadBaseUrlOverride ?? _config.CurrentProfile.SideloadBaseUrl);
                     await done.Task;
                 }
                 finally
@@ -469,9 +555,9 @@ public partial class MainWindowViewModel : ObservableObject
 
     internal void RefreshStats()
     {
-        ModCount = _config.Settings.LocalMods.Count;
-        UsageCount = _config.Settings.ModUsage.Count;
-        TotalRefs = _config.Settings.ModUsage.Values.Sum();
+        ModCount = _config.Settings.Current.LocalMods.Count;
+        UsageCount = _config.Settings.Current.ModUsage.Count;
+        TotalRefs = _config.Settings.Current.ModUsage.Values.Sum();
         MissingModCount = ComputeMissingMods().Count;
         OnPropertyChanged(nameof(HasScanData));
         OnPropertyChanged(nameof(ShowModsReady));

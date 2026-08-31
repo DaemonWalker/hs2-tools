@@ -10,13 +10,14 @@ namespace HS2Tools.Services;
 
 /// <summary>
 /// Sideload 爬虫（Go internal/sideloader 的 1:1 移植）。
-/// 爬取 BetterRepack 目录列表，对每个远程 zipmod 只发 3~18 次 HTTP Range 小请求提取 GUID。
+/// 爬取 BetterRepack autoindex 目录列表，对每个远程 zipmod 只发 3~18 次 HTTP Range 小请求提取 GUID。
+/// 爬虫从起始 URL 递归下钻全部子目录（ParseLinks 分流目录/mod，目录级并发 3），
+/// 因此 KKEC 根目录（其下是多个 "Sideloader Modpack*" 子目录）与 AISHS2 用同一套逻辑即可覆盖，
+/// 各游戏仅起点 baseUrl 不同（见 GameProfiles.*.SideloadBaseUrl，唯一事实来源）。
 /// Run 可重入（每次运行新建内部状态）；Cancel 只置标志位（已发出的请求不中断）。
 /// </summary>
 public class SideloaderService : ISideloaderService
 {
-    public const string StartUrl = "https://sideload.betterrepack.com/download/AISHS2/";
-
     private const string UserAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36 Edg/111.0.1661.54";
 
@@ -43,7 +44,7 @@ public class SideloaderService : ISideloaderService
     }
 
     /// <param name="proxy">代理串（含认证），解析失败时忽略（与原版一致）</param>
-    /// <param name="baseUrl">起始 URL（测试用；生产用默认）</param>
+    /// <param name="baseUrl">起始 URL（各游戏不同，见 GameProfiles.SideloadBaseUrl；空则回退 HS2）</param>
     public SideloaderService(string? proxy = null, string? baseUrl = null)
     {
         var handler = new HttpClientHandler();
@@ -60,7 +61,7 @@ public class SideloaderService : ISideloaderService
             DefaultRequestVersion = HttpVersion.Version20,
             DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
         };
-        _baseUrl = baseUrl ?? StartUrl;
+        _baseUrl = baseUrl ?? GameProfiles.Hs2.SideloadBaseUrl;
     }
 
     public bool IsRunning
@@ -450,9 +451,13 @@ public class SideloaderService : ISideloaderService
     /// <summary>
     /// 加载内嵌的 sideload 数据库（对应 app.go InitSideload + utils.ExtractZipJSON）。
     /// 从内嵌资源 sideload.zip 中按精确名（区分大小写）取 sideload.json。
+    /// 内嵌库只有 HS2（AISHS2）一份；其他数据源（如 kkec）返回空字典，由用户爬虫更新落盘。
     /// </summary>
-    public static Dictionary<string, string> LoadBundledDatabase()
+    public static Dictionary<string, string> LoadBundledDatabase(string sourceId = "hs2")
     {
+        if (sourceId != GameProfiles.Hs2.SideloadSourceId)
+            return new Dictionary<string, string>();
+
         var asm = typeof(SideloaderService).Assembly;
         var resourceName = Array.Find(asm.GetManifestResourceNames(),
             n => n.EndsWith("sideload.zip", StringComparison.OrdinalIgnoreCase))

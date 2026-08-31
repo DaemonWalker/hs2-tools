@@ -134,7 +134,7 @@ public partial class CardDetailViewModel : ObservableObject
                 ModItems.Add(new DetailModItem
                 {
                     Guid = guid,
-                    IsLocal = _config.Settings.LocalMods.ContainsKey(guid),
+                    IsLocal = _config.Settings.Current.LocalMods.ContainsKey(guid),
                     HasUrl = _sideloadDb.Database.ContainsKey(guid),
                     Status = task?.Status,
                     Percent = task?.Percent ?? 0,
@@ -166,6 +166,9 @@ public partial class CardDetailViewModel : ObservableObject
         MissingCount = ModItems.Count - LocalCount;
     }
 
+    /// <summary>测试用：非 null 时覆盖下载 base URL（默认取当前游戏档案的 SideloadBaseUrl）</summary>
+    internal string? DownloadBaseUrlOverride;
+
     /// <summary>单项下载（对应原版 DownloadButton onClick）</summary>
     [RelayCommand]
     private void DownloadMod(DetailModItem item)
@@ -173,7 +176,8 @@ public partial class CardDetailViewModel : ObservableObject
         var dir = _config.GetModDownloadDir();
         if (dir is null || !_sideloadDb.Database.TryGetValue(item.Guid, out var url))
             return;
-        _downloads.StartDownload(item.Guid, url, dir);
+        _downloads.StartDownload(item.Guid, url, dir,
+            DownloadBaseUrlOverride ?? _config.CurrentProfile.SideloadBaseUrl);
         // StartDownload 后任务进入下载中：即时刷新按钮态（事件随后也会到）
         UpdateItemStatus(FindTask(item.Guid)!);
     }
