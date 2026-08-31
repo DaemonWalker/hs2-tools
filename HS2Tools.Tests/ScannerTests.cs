@@ -233,6 +233,56 @@ public class ScannerTests : IDisposable
     }
 
     [Fact]
+    public void ReadPngModsAndShaders_MatchesOnlyUsedShaderNames()
+    {
+        // KK 卡 KKEx 内 ME 插件数据含 "xukmi/SkinPlus"：候选中命中它，未出现的 "xukmi/FX" 不命中；
+        // GUID 提取不受影响
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegionWithShaders(
+                "白峰", "一乃", new[] { "com.kk.mod" }, new[] { "xukmi/SkinPlus" }));
+        var candidates = new List<KeyValuePair<string, byte[]>>
+        {
+            new("xukmi/SkinPlus", "xukmi/SkinPlus"u8.ToArray()),
+            new("xukmi/FX", "xukmi/FX"u8.ToArray()),
+        };
+
+        var result = _svc.ReadPngModsAndShaders(path, candidates);
+
+        Assert.Equal(new[] { "com.kk.mod" }, result.ModIDs);
+        Assert.Equal(new[] { "xukmi/SkinPlus" }, result.ShaderNames);
+    }
+
+    [Fact]
+    public void ReadPngModsAndShaders_EmptyCandidates_DegeneratesToModsOnly()
+    {
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegionWithShaders(
+                "白峰", "一乃", new[] { "com.kk.mod" }, new[] { "xukmi/SkinPlus" }));
+
+        var result = _svc.ReadPngModsAndShaders(path, new List<KeyValuePair<string, byte[]>>());
+
+        Assert.Equal(new[] { "com.kk.mod" }, result.ModIDs);
+        Assert.Empty(result.ShaderNames);
+    }
+
+    [Fact]
+    public void ReadPngModsAndShaders_FallbackScansWholeDataRegion()
+    {
+        // 结构化解析失败（无卡头标记的裸字节区）→ 回退扫整个数据区，shader 名仍能命中
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), "garbage-xukmi/SkinPlus-garbage"u8.ToArray());
+        var candidates = new List<KeyValuePair<string, byte[]>>
+        {
+            new("xukmi/SkinPlus", "xukmi/SkinPlus"u8.ToArray()),
+        };
+
+        var result = _svc.ReadPngModsAndShaders(path, candidates);
+
+        Assert.Empty(result.ModIDs);
+        Assert.Equal(new[] { "xukmi/SkinPlus" }, result.ShaderNames);
+    }
+
+    [Fact]
     public void ParsePngData_Scene_TwoCharaBlobsAndTrailer()
     {
         // 场景：两个内嵌 chara blob + KKEx trailer

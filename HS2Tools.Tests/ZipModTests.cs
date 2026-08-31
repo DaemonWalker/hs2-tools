@@ -36,6 +36,34 @@ public class ZipModTests : IDisposable
     }
 
     [Fact]
+    public void ReadZipMod_MaterialEditorShaders_Extracted()
+    {
+        // 与 xukmi Vanilla Plus 真实 manifest 同构：<MaterialEditor><Shader Name="..."/>
+        var manifest = "<?xml version=\"1.0\"?>\n<manifest>\n" +
+                       "<guid>xukmi.Shaders.VanillaPlus</guid>\n<name>Vanilla Plus</name>\n<version>1.5.3</version>\n" +
+                       "<MaterialEditor>\n" +
+                       "<Shader Name=\"xukmi/SkinPlus\" AssetBundle=\"chara/xukmi/shaders/vanillaplus.unity3d\" Asset=\"a_SkinPlus\" />\n" +
+                       "<Shader Name=\"xukmi/MainOpaquePlus\" />\n" +
+                       "</MaterialEditor>\n</manifest>";
+        var path = TestAssets.WriteZipmod(_dir, "shader.zipmod", manifest);
+
+        var result = _svc.ReadZipMod(path);
+
+        var info = Assert.Single(result);
+        Assert.Equal(new[] { "xukmi/SkinPlus", "xukmi/MainOpaquePlus" }, info.Value.ShaderNames);
+    }
+
+    [Fact]
+    public void ReadZipMod_NoMaterialEditor_EmptyShaderNames()
+    {
+        var path = TestAssets.WriteZipmod(_dir, "plain.zipmod", TestAssets.MakeManifest("com.test.plain"));
+
+        var result = _svc.ReadZipMod(path);
+
+        Assert.Empty(Assert.Single(result).Value.ShaderNames);
+    }
+
+    [Fact]
     public void ReadZipMod_CleansGuidAndName_ButNotVersion()
     {
         // guid/name 含控制字符与非 ASCII → 清洗；version 含制表符/换行 → 原样保留

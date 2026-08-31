@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HS2Tools.Models;
@@ -332,12 +333,34 @@ public partial class ModsWindowViewModel : ObservableObject
                 files.AddRange(_scanner.ScanDirectory(unusedDir, new ScanOptions { TargetExtension = { ".zipmod" } }));
             var entries = await _scanner.ReadZipModBatchListAsync(files, onError: LogScanError);
 
-            var charaUsage = await ScanPngUsageSetAsync(_config.GetCharaDir());
-            var sceneUsage = await ScanPngUsageSetAsync(_config.GetSceneDir());
+            // shader 使用检测：卡片不按 GUID 引用 shader 包，但会把 shader 名明文留在 KKEx
+            // （Material Editor 数据）里；以 manifest 声明的 shader 名为候选做内容级匹配
+            var shaderNameToGuids = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var (guid, info) in entries)
+            {
+                foreach (var name in info.ShaderNames)
+                {
+                    if (!shaderNameToGuids.TryGetValue(name, out var guids))
+                        shaderNameToGuids[name] = guids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    guids.Add(guid);
+                }
+            }
+            var shaderNames = shaderNameToGuids.Keys
+                .Select(n => new KeyValuePair<string, byte[]>(n, Encoding.UTF8.GetBytes(n)))
+                .ToList();
+            var usedShaderNames = new HashSet<string>(StringComparer.Ordinal);
+
+            var charaUsage = await ScanPngUsageSetAsync(_config.GetCharaDir(), shaderNames, usedShaderNames);
+            var sceneUsage = await ScanPngUsageSetAsync(_config.GetSceneDir(), shaderNames, usedShaderNames);
+            // 命中 shader 名 → 提供它的 mod GUID（整理时按人物卡引用同口径豁免）
+            var shaderUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in usedShaderNames)
+                foreach (var guid in shaderNameToGuids[name])
+                    shaderUsage.Add(guid);
 
             // 有扫描记录（meta 存在）才按站点目录归位，否则站点索引不参与分类
             var siteIndex = _sideloadDb.GetMeta() is not null ? _sideloadDb.Database : null;
-            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage, siteIndex, gamePath, modsDir);
+            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage, shaderUsage, siteIndex, gamePath, modsDir);
             if (plan.Duplicates.Count == 0 && plan.Unused.Count == 0 &&
                 plan.SceneOnly.Count == 0 && plan.SitePlaced.Count == 0)
             {
@@ -478,8 +501,13 @@ public partial class ModsWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>扫描 PNG 目录汇成引用 GUID 集合（分批同 MainWindowViewModel，目录不存在视为空）</summary>
-    private async Task<HashSet<string>> ScanPngUsageSetAsync(string? dir)
+    /// <summary>
+    /// 扫描 PNG 目录汇成引用 GUID 集合（分批同 MainWindowViewModel，目录不存在视为空）。
+    /// shaderNames 非空时同步做 shader 使用检测，命中的 shader 名累积进 usedShaderNames。
+    /// </summary>
+    private async Task<HashSet<string>> ScanPngUsageSetAsync(
+        string? dir, IReadOnlyList<KeyValuePair<string, byte[]>>? shaderNames = null,
+        HashSet<string>? usedShaderNames = null)
     {
         var usage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (dir is null || !Directory.Exists(dir))
@@ -490,8 +518,21 @@ public partial class ModsWindowViewModel : ObservableObject
         for (var i = 0; i < files.Count; i += batchSize)
         {
             var batch = files.GetRange(i, Math.Min(batchSize, files.Count - i));
-            var results = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
-            foreach (var item in results)
+            if (shaderNames is { Count: > 0 })
+            {
+                var results = await _scanner.ReadPngModsAndShadersBatchAsync(batch, shaderNames, onError: LogScanError);
+                foreach (var item in results)
+                {
+                    foreach (var modId in item.ModIDs)
+                        usage.Add(modId);
+                    if (usedShaderNames is not null)
+                        foreach (var name in item.ShaderNames)
+                            usedShaderNames.Add(name);
+                }
+                continue;
+            }
+            var modsOnly = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
+            foreach (var item in modsOnly)
                 foreach (var modId in item.ModIDs)
                     usage.Add(modId);
         }

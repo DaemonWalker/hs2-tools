@@ -15,6 +15,15 @@ public class PngModResult
     public List<string> ModIDs { get; set; } = new();
 }
 
+/// <summary>单个 PNG 文件的 Mod + shader 使用结果（整理功能的 shader 豁免判定用）</summary>
+public class PngModShaderResult
+{
+    public string Path { get; set; } = "";
+    public List<string> ModIDs { get; set; } = new();
+    /// <summary>命中的 shader 名（来自调用方给定的候选集合，按出现顺序去重）</summary>
+    public List<string> ShaderNames { get; set; } = new();
+}
+
 /// <summary>单个 PNG 文件的角色名结果</summary>
 public class PngNamesResult
 {

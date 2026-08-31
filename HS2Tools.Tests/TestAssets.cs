@@ -124,6 +124,10 @@ internal static class TestAssets
     public static byte[] BuildKkCharaDataRegion(string lastName, string firstName, string[] guids)
         => BuildKkCharaBlob(lastName, firstName, guids);
 
+    /// <summary>合成带 Material Editor 插件数据的 KK 角色卡数据区（shader 名明文写入 ME 数据）</summary>
+    public static byte[] BuildKkCharaDataRegionWithShaders(string lastName, string firstName, string[] guids, string[] shaderNames)
+        => BuildKkCharaBlob(lastName, firstName, guids, meShaderNames: shaderNames);
+
     /// <summary>合成混合数据区：HS2 角色 blob + KK 角色 blob（场景内嵌多游戏 blob 情形）</summary>
     public static byte[] BuildMixedCharaDataRegion(
         string hs2Name, string[] hs2Guids, string kkLastName, string kkFirstName, string[] kkGuids)
@@ -178,12 +182,12 @@ internal static class TestAssets
 
     /// <summary>单个 KK ChaFile blob：KK 真实信封（version 后接 facePng，无 lang/userID/dataID），
     /// 标记【KoiKatuChara】，Parameter 用 lastname/firstname，BlockHeader 用真实卡的 map 形式</summary>
-    private static byte[] BuildKkCharaBlob(string lastName, string firstName, string[] guids)
+    private static byte[] BuildKkCharaBlob(string lastName, string firstName, string[] guids, string[]? meShaderNames = null)
     {
         var infos = new List<(string Name, byte[] Data)>
         {
             ("Parameter", BuildKkNameBlock(lastName, firstName)),
-            ("KKEx", BuildKkexBlock(guids)),
+            ("KKEx", BuildKkexBlock(guids, meShaderNames: meShaderNames)),
         };
         return BuildBlob("【KoiKatuChara】", infos, kkEnvelope: true);
     }
@@ -299,13 +303,17 @@ internal static class TestAssets
     /// <summary>
     /// KKEx msgpack：map&lt;插件ID, [version, data]&gt;；UAR data["info"] = array of bin，
     /// 每个 bin 是一条 ResolveInfo msgpack map（"ModID"/"Slot"）。otherPluginGuids 写入
-    /// 无关插件（含同名 "ModID" 键），验证命名空间隔离。
+    /// 无关插件（含同名 "ModID" 键），验证命名空间隔离。meShaderNames 写入 Material Editor
+    /// 插件数据（真实卡 ME 数据为嵌套 msgpack，shader 名以明文字符串留存其中）。
     /// </summary>
-    private static byte[] BuildKkexBlock(string[] guids, string[]? otherPluginGuids = null)
+    private static byte[] BuildKkexBlock(string[] guids, string[]? otherPluginGuids = null, string[]? meShaderNames = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         var w = new MessagePackWriter(buffer);
-        w.WriteMapHeader(otherPluginGuids is { Length: > 0 } ? 2 : 1);
+        var pluginCount = 1
+            + (otherPluginGuids is { Length: > 0 } ? 1 : 0)
+            + (meShaderNames is { Length: > 0 } ? 1 : 0);
+        w.WriteMapHeader(pluginCount);
         w.Write("com.bepis.sideloader.universalautoresolver");
         w.WriteArrayHeader(2);
         w.Write(2); // plugin data version
@@ -324,6 +332,17 @@ internal static class TestAssets
             w.WriteArrayHeader(otherPluginGuids.Length);
             foreach (var guid in otherPluginGuids)
                 w.Write(BuildResolveInfo(guid));
+        }
+        if (meShaderNames is { Length: > 0 })
+        {
+            w.Write("com.deathweasel.bepinex.materialeditor");
+            w.WriteArrayHeader(2);
+            w.Write(6); // plugin data version
+            w.WriteMapHeader(1);
+            w.Write("data");
+            w.WriteArrayHeader(meShaderNames.Length);
+            foreach (var shader in meShaderNames)
+                w.Write(shader);
         }
         w.Flush();
         return buffer.WrittenSpan.ToArray();

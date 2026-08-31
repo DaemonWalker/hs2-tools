@@ -366,6 +366,85 @@ public class ScannerService
         return results.ToList();
     }
 
+    // ==================== shader 使用检测 ====================
+    // 卡片把用到的 shader 名明文存在 KKEx（Material Editor 插件数据）里；manifest 的
+    // <MaterialEditor><Shader Name="..."/> 给出"shader 名 → 提供它的 mod"映射，
+    // 两侧求交即知哪些 shader 包被使用（整理功能据此豁免，见 ModOrganizeHelper.BuildPlan）。
+
+    /// <summary>
+    /// 从 PNG 提取 Mod GUID + 命中的 shader 名。shader 名只在结构化解析的 KKEx 原始字节
+    /// （块 + trailer）内做 Ordinal 子串匹配；结构化失败回退时与 GUID 同口径扫整个数据区
+    /// （无 IEND 则扫全文件）。候选集为空时退化为 ReadPngMods（不做 shader 匹配）。
+    /// </summary>
+    public PngModShaderResult ReadPngModsAndShaders(string filePath, IReadOnlyList<KeyValuePair<string, byte[]>> shaderNames)
+    {
+        var result = new PngModShaderResult { Path = filePath };
+        if (!FileExists(filePath))
+            return result;
+        if (shaderNames.Count == 0)
+        {
+            result.ModIDs = ReadPngMods(filePath);
+            return result;
+        }
+
+        var data = File.ReadAllBytes(filePath);
+        var offset = GetDataRegionOffset(data);
+        if (offset >= 0)
+        {
+            var kkexBlobs = new List<byte[]>();
+            var (_, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsSpan(offset), kkexBlobs);
+            if (structuralOk)
+            {
+                result.ModIDs = modIds;
+                foreach (var blob in kkexBlobs)
+                    MatchShaderNames(blob, shaderNames, result.ShaderNames);
+                return result;
+            }
+            ErrorLog.Log($"structural parse failed, fallback to byte scan in data region ({data.Length - offset} bytes)");
+            result.ModIDs = SearchBuffer(ModStart, ModEnd, data[offset..]);
+            MatchShaderNames(data.AsSpan(offset), shaderNames, result.ShaderNames);
+            return result;
+        }
+        // 无 IEND（非卡片文件）：与 ExtractFromGameData 一致，全文件回退
+        result.ModIDs = SearchBuffer(ModStart, ModEnd, data);
+        MatchShaderNames(data, shaderNames, result.ShaderNames);
+        return result;
+    }
+
+    /// <summary>在字节区内按 Ordinal 子串匹配候选 shader 名，命中项按候选顺序去重追加</summary>
+    private static void MatchShaderNames(
+        ReadOnlySpan<byte> region, IReadOnlyList<KeyValuePair<string, byte[]>> shaderNames, List<string> hits)
+    {
+        foreach (var (name, bytes) in shaderNames)
+        {
+            if (bytes.Length > 0 && !hits.Contains(name) && region.IndexOf(bytes) >= 0)
+                hits.Add(name);
+        }
+    }
+
+    /// <summary>批量提取 Mod GUID + shader 使用（默认并发 8）。单文件失败跳过（记日志）</summary>
+    public async Task<List<PngModShaderResult>> ReadPngModsAndShadersBatchAsync(
+        IReadOnlyList<string> filePaths, IReadOnlyList<KeyValuePair<string, byte[]>> shaderNames,
+        int concurrency = 8, Action<string>? onError = null, CancellationToken ct = default)
+    {
+        if (concurrency <= 0)
+            concurrency = 8;
+        var results = new ConcurrentBag<PngModShaderResult>();
+        await Parallel.ForEachAsync(filePaths, new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = ct }, (path, _) =>
+        {
+            try
+            {
+                results.Add(ReadPngModsAndShaders(path, shaderNames));
+            }
+            catch (Exception ex)
+            {
+                onError?.Invoke($"ReadPngModsAndShaders failed: {path}: {ex.Message}");
+            }
+            return ValueTask.CompletedTask;
+        });
+        return results.ToList();
+    }
+
     /// <summary>批量提取角色名称（默认并发 8）。单文件失败跳过（记日志）</summary>
     public async Task<List<PngNamesResult>> ReadPngNamesBatchAsync(
         IReadOnlyList<string> filePaths, int concurrency = 8, Action<string>? onError = null, CancellationToken ct = default)
@@ -604,9 +683,27 @@ public class ScannerService
                     Name = cleanName,
                     Version = GetElementValue(doc.Root, "version") ?? "", // Version 不清洗
                     Path = filePath,
+                    ShaderNames = GetShaderNames(doc.Root),
                 },
             };
         }
+    }
+
+    /// <summary>manifest <![CDATA[<MaterialEditor><Shader Name="..."/>]]> 声明的 shader 名表（元素/属性名大小写不敏感，无则空表）</summary>
+    private static List<string> GetShaderNames(XElement root)
+    {
+        var me = root.Elements().FirstOrDefault(
+            e => string.Equals(e.Name.LocalName, "MaterialEditor", StringComparison.OrdinalIgnoreCase));
+        if (me is null)
+            return new List<string>();
+        return me.Elements()
+            .Where(e => string.Equals(e.Name.LocalName, "Shader", StringComparison.OrdinalIgnoreCase))
+            .Select(e => e.Attributes().FirstOrDefault(
+                a => string.Equals(a.Name.LocalName, "Name", StringComparison.OrdinalIgnoreCase))?.Value)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Cast<string>()
+            .Distinct()
+            .ToList();
     }
 
     private static string? GetElementValue(XElement root, string name)

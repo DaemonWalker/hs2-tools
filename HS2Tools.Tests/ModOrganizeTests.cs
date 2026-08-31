@@ -40,9 +40,10 @@ public class ModOrganizeTests : IDisposable
         IReadOnlyList<KeyValuePair<string, ModInfo>> entries,
         ISet<string>? chara = null,
         ISet<string>? scene = null,
-        IReadOnlyDictionary<string, string>? siteIndex = null) =>
+        IReadOnlyDictionary<string, string>? siteIndex = null,
+        ISet<string>? shader = null) =>
         ModOrganizeHelper.BuildPlan(entries,
-            chara ?? EmptyUsage, scene ?? EmptyUsage, siteIndex, GamePath, ModsDir);
+            chara ?? EmptyUsage, scene ?? EmptyUsage, shader ?? EmptyUsage, siteIndex, GamePath, ModsDir);
 
     [Fact]
     public void BuildPlan_Unused_WhenNeitherCardReferences()
@@ -125,6 +126,39 @@ public class ModOrganizeTests : IDisposable
         var move = Assert.Single(plan.SitePlaced);
         Assert.Equal(ModsDir, move.TargetDir); // 无索引：移回 mods 根目录
         Assert.Empty(plan.SceneOnly);
+    }
+
+    [Fact]
+    public void BuildPlan_ShaderUsed_ExemptFromUnused()
+    {
+        // 提供被卡片使用 shader 的 mod：按人物卡引用同口径，在 mods 原地不动
+        var plan = Plan([Entry("g-sh")], shader: Usage("g-sh"));
+
+        Assert.Empty(plan.Unused);
+        Assert.Empty(plan.SceneOnly);
+        Assert.Empty(plan.SitePlaced);
+        Assert.Single(plan.Winners);
+    }
+
+    [Fact]
+    public void BuildPlan_ShaderUsed_InUnusedmods_MovesBackToModsRoot()
+    {
+        // 被使用 shader 包误在 unusedmods（本次改造的修复场景）：移回 mods 根目录
+        var plan = Plan([Entry("g-sh", path: $@"{UnusedDir}\sh.zipmod")], shader: Usage("g-sh"));
+
+        var move = Assert.Single(plan.SitePlaced);
+        Assert.Equal(ModsDir, move.TargetDir);
+        Assert.Empty(plan.Unused);
+    }
+
+    [Fact]
+    public void BuildPlan_ShaderUnused_StillMovedToUnusedmods()
+    {
+        // 未被任何卡片使用的 shader 包：口径不变，照常判未使用
+        var plan = Plan([Entry("g-sh")], shader: Usage("g-other"));
+
+        var move = Assert.Single(plan.Unused);
+        Assert.Equal(UnusedDir, move.TargetDir);
     }
 
     [Fact]
