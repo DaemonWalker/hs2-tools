@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\HS2Tools\HS2Tools.csproj" />
+    <ProjectReference Include="..\HS2Tools\HS2Tools.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -9,7 +9,9 @@ namespace HS2Tools.Controls;
 /// 虚拟化 Wrap 面板（WPF 无内置 VirtualizingWrapPanel）。
 /// 简化前提：所有子项尺寸固定（ItemWidth × ItemHeight），因此列数/行号可直接按索引算出，
 /// 只需实现经典 VirtualizingPanel + IScrollInfo 配方（按可视区实现化、离屏回收）。
-/// 须放在 CanContentScroll=true 的 ScrollViewer 中使用（否则拿到无限高测量，退化为全量实现化）。
+/// 须放在 CanContentScroll=true 的 ScrollViewer 中使用。被挂为滚动面板后，
+/// ScrollContentPresenter 会以无限高测量本面板：此时沿用上一趟有限视口决定实现化范围，
+/// 且 DesiredSize 回报 extent——把 ∞ 原样返回会被 WPF 抛 InvalidOperationException。
 /// </summary>
 public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
 {
@@ -54,22 +56,27 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
         var columns = ColumnCount(availableSize.Width);
         var rows = itemCount == 0 ? 0 : (itemCount + columns - 1) / columns;
 
+        // 无限高测量的两种来源：滚动面板委托（ScrollOwner 非空，常态）与非滚动宿主（退化，全量实现化）。
+        // 前者沿用上一趟有限视口——首趟测量必为有限（面板须先存在才能被挂为滚动信息），视口必有值。
+        var infiniteMeasure = double.IsPositiveInfinity(availableSize.Height);
+        var viewportHeight = !infiniteMeasure ? availableSize.Height
+            : ScrollOwner is not null ? _viewport.Height
+            : rows * ItemHeight;
+
         _extent = new Size(columns * ItemWidth, rows * ItemHeight);
-        _viewport = availableSize;
+        _viewport = new Size(availableSize.Width, viewportHeight);
         SetVerticalOffset(_offset.Y); // 钳制偏移（窗口变宽后行数变少）
         ScrollOwner?.InvalidateScrollInfo();
 
         if (itemCount == 0)
         {
             CleanUpItems(0, -1);
-            return availableSize;
+            return infiniteMeasure ? _extent : availableSize;
         }
 
         // 可视范围（多实现化一行做缓冲）
         var firstRow = Math.Max(0, (int)Math.Floor(_offset.Y / ItemHeight));
-        var visibleRows = double.IsInfinity(availableSize.Height)
-            ? rows // 非滚动环境退化：全量实现化
-            : (int)Math.Ceiling(availableSize.Height / ItemHeight) + 1;
+        var visibleRows = (int)Math.Ceiling(viewportHeight / ItemHeight) + 1;
         var firstIndex = firstRow * columns;
         var lastIndex = Math.Min(itemCount - 1, (firstRow + visibleRows) * columns - 1);
 
@@ -95,7 +102,8 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
             }
         }
 
-        return availableSize;
+        // ∞ 不得作为 DesiredSize 返回（WPF 抛 InvalidOperationException），统一回报 extent
+        return infiniteMeasure ? _extent : availableSize;
     }
 
     /// <summary>回收可视范围外的容器</summary>
@@ -130,7 +138,9 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
                 continue;
             var row = itemIndex / columns;
             var col = itemIndex % columns;
-            child.Arrange(new Rect(col * ItemWidth, row * ItemHeight, ItemWidth, ItemHeight));
+            // IScrollInfo 约定：ScrollContentPresenter 不替内容做滚动平移，
+            // 偏移由面板在排列时自行扣除（少了这一步：一滚动可视区就空白）
+            child.Arrange(new Rect(col * ItemWidth, row * ItemHeight - _offset.Y, ItemWidth, ItemHeight));
         }
         return finalSize;
     }

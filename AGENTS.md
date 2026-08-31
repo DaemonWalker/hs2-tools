@@ -12,32 +12,30 @@ HS2-Tools 是一个基于 **.NET 8 + WPF** 的桌面应用，用于管理 Honey 
 | **技术栈** | .NET 8 LTS + WPF（`net8.0-windows`） |
 | **UI 模式** | MVVM（CommunityToolkit.Mvvm，源生成器） |
 | **HTML 解析** | HtmlAgilityPack |
-| **测试** | xUnit（`tests/HS2Tools.Tests`） |
+| **测试** | xUnit（`HS2Tools.Tests`） |
 | **配置存储** | 统一强类型配置 `%AppData%/hs2-tools/settings.json`（ConfigService） |
 | **日志** | `Services/ErrorLog.cs` → `%AppData%/hs2-tools/error.log`（永不抛出） |
 
 ## 目录结构
 
 ```
-hs2-tools-csharp/
-├── src/HS2Tools/
-│   ├── Services/      # 核心服务单例（Config/Scanner/Downloader+DownloadManager/
-│   │                  #   Sideloader/SideloadDatabase/GameLauncher/ErrorLog），与 UI 解耦可单测
-│   ├── ViewModels/    # 每页一个 VM（+ 共用 CardDetailViewModel）
-│   ├── Views/         # 每页一个独立 Window（WindowManager 单例 + Hide/Show 保状态）
-│   ├── Controls/      # CardGridControl（虚拟化网格）/ CardDetailPanel / VirtualizingWrapPanel
-│   ├── Themes/        # 单主题资源字典（控件一律 DynamicResource）
-│   └── Resources/     # sideload.zip（EmbeddedResource，SideloadDatabase 回退库）
-└── tests/HS2Tools.Tests/  # xUnit：解析器字节级回归 + VM 测试 + 真实环境基准（env 门控）
+HS2Tools/
+├── Services/      # 核心服务单例（Config/Scanner/Downloader+DownloadManager/
+│                  #   Sideloader/SideloadDatabase/GameLauncher/ErrorLog），与 UI 解耦可单测
+├── ViewModels/    # 每页一个 VM（+ 共用 CardDetailViewModel）
+├── Views/         # 每页一个独立 Window（WindowManager 单例 + Hide/Show 保状态）
+├── Controls/      # CardGridControl（虚拟化网格）/ CardDetailPanel / VirtualizingWrapPanel
+├── Themes/        # 单主题资源字典（控件一律 DynamicResource）
+└── Resources/     # sideload.zip（EmbeddedResource，SideloadDatabase 回退库）
+HS2Tools.Tests/    # xUnit：解析器字节级回归 + VM 测试 + 真实环境基准（env 门控）
 ```
 
 ## 常用命令
 
 ```bash
-cd hs2-tools-csharp
 dotnet build
 dotnet test
-dotnet publish src/HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
+dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
   --self-contained -p:PublishSingleFile=true -o publish   # 单文件自包含 exe
 ```
 

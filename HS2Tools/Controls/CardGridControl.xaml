@@ -53,7 +53,7 @@
                             BorderBrush="{DynamicResource BorderBrush}"
                             MouseLeftButtonUp="Card_Click">
                         <Border.Style>
-                            <Style TargetType="Border" BasedOn="{StaticResource {x:Type Border}}">
+                            <Style TargetType="Border">
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsSelected}" Value="True">
                                         <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>

@@ -20,25 +20,24 @@
 ## 构建与测试
 
 ```bash
-cd hs2-tools-csharp
 dotnet build
 dotnet test
 ```
 
-发布单文件自包含 exe（产物在 `hs2-tools-csharp/publish/`）：
+发布单文件自包含 exe（产物在 `publish/`）：
 
 ```bash
-dotnet publish src/HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
+dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
   --self-contained -p:PublishSingleFile=true -o publish
 ```
 
 ## 目录结构
 
 ```
-├── hs2-tools-csharp/      # 应用本体（全部代码）
-│   ├── src/HS2Tools/        # WPF 应用（Services / ViewModels / Views / Controls）
-│   └── tests/HS2Tools.Tests/  # xUnit 测试
-└── docs/                  # 项目文档
+├── HS2Tools/        # WPF 应用（Services / ViewModels / Views / Controls）
+├── HS2Tools.Tests/  # xUnit 测试
+├── HS2Tools.sln     # 解决方案文件
+└── docs/            # 项目文档
 ```
 
 ## 文档

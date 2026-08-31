@@ -7,6 +7,8 @@ vendor/
 # ============================================
 # Build outputs
 # ============================================
+bin/
+obj/
 dist
 out
 build
@@ -17,6 +19,10 @@ tmp
 *.dll
 *.so
 *.dylib
+*.user
+.vs/
+TestResults/
+publish/
 
 # ============================================
 # Go specific
