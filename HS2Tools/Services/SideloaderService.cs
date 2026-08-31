@@ -252,7 +252,10 @@ public class SideloaderService : ISideloaderService
                     }
                     if (decoded == "" || decoded == "/")
                         continue;
-                    hrefSet.Add(pageUrl + decoded);
+                    // 目录/文件名可含 URI 结构字符（如 KKEC 的 #KK_MaterialEditor 目录，href 为 %23KK_MaterialEditor/）。
+                    // 解码后直接拼接，# 会被 Uri 当作 fragment 截断：实际请求落到父目录，ParseLinks 又解析出
+                    // 同一链接 → 无限递归。拼回 URL 前把 # / ? 转义还原（等价于服务器 href 的原始编码形态）。
+                    hrefSet.Add(pageUrl + decoded.Replace("#", "%23").Replace("?", "%3F"));
                 }
             }
         }

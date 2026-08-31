@@ -84,6 +84,25 @@ public class SideloaderTests : IDisposable
         Assert.Single(mods);
     }
 
+    [Fact]
+    public void ParseLinks_HashDir_StaysEscaped()
+    {
+        // KKEC 存在 #KK_MaterialEditor 目录（href 为 %23KK_MaterialEditor/）：解码出的 # 若直接
+        // 拼回 URL 会被 Uri 当作 fragment 截断 → 请求落到父目录 → 无限递归。拼回前须转义还原。
+        var html = """
+            <table id="indexlist">
+            <tr><td>h</td></tr>
+            <tr><td>h</td></tr>
+            <tr><td><a href="%23KK_MaterialEditor/">#KK_MaterialEditor/</a></td></tr>
+            <tr><td><a href="mod%23x.zipmod">mod#x.zipmod</a></td></tr>
+            </table>
+            """;
+        var (dirs, mods) = SideloaderService.ParseLinks(LoadHtml(html), "http://x/");
+
+        Assert.Equal(new[] { "http://x/%23KK_MaterialEditor/" }, dirs);
+        Assert.Equal(new[] { "http://x/mod%23x.zipmod" }, mods);
+    }
+
     // ==================== 集成爬取 ====================
 
     [Fact]
@@ -184,6 +203,35 @@ public class SideloaderTests : IDisposable
         var result = await svc.RunAsync();
 
         Assert.Empty(result); // 渐进块被拒 → 无法解析中央目录 → 跳过该 mod（而不是吃掉数 GB 内存）
+    }
+
+    [Fact]
+    public async Task Crawl_HashDirectory_DoesNotLoop()
+    {
+        // 目录名含 #（KKEC 的 #KK_MaterialEditor）：修复前请求被 fragment 截断回落到父目录，无限递归
+        var small = File.ReadAllBytes(WriteZipmod(_dir, "modH.zipmod",
+            MakeManifest("com.test.hash"), deflate: false));
+
+        _server.MapHtml("/", """
+            <table id="indexlist">
+            <tr><th>Name</th></tr>
+            <tr><td><a href="../">../</a></td></tr>
+            <tr><td><a href="%23KK_MaterialEditor/">#KK_MaterialEditor/</a></td></tr>
+            </table>
+            """);
+        _server.MapHtml("/%23KK_MaterialEditor/", """
+            <table id="indexlist">
+            <tr><th>Name</th></tr>
+            <tr><td><a href="../">../</a></td></tr>
+            <tr><td><a href="modH.zipmod">modH.zipmod</a></td></tr>
+            </table>
+            """);
+        _server.MapFile("/%23KK_MaterialEditor/modH.zipmod", small);
+
+        var svc = new SideloaderService(baseUrl: _server.BaseUrl);
+        var result = await svc.RunAsync();
+
+        Assert.Equal("%23KK_MaterialEditor/modH.zipmod", result["com.test.hash"]);
     }
 
     [Fact]
