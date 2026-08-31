@@ -15,8 +15,8 @@ HS2-Tools 是一个基于 **.NET 8 + WPF** 的桌面应用，用于管理 Honey 
 | **HTML 解析** | HtmlAgilityPack |
 | **MessagePack** | MessagePack-CSharp 3.x（仅底层 Reader/Writer 步行，卡片/场景结构化解析） |
 | **测试** | xUnit（`HS2Tools.Tests`） |
-| **配置存储** | 统一强类型配置 `%AppData%/hs2-tools/settings.json`（ConfigService） |
-| **日志** | `Services/ErrorLog.cs` → `%AppData%/hs2-tools/error.log`（永不抛出） |
+| **配置存储** | 统一强类型配置 settings.json（ConfigService）。绿色版：数据目录优先程序所在目录下 `data/`，无写权限回退 `%AppData%/hs2-tools/`，首启自动迁移旧 %AppData% 配置 |
+| **日志** | `Services/ErrorLog.cs` → 数据目录下 `error.log`（永不抛出） |
 
 ## 目录结构
 

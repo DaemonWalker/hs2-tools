@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 namespace HS2Tools.Models;
 
 /// <summary>
-/// 统一应用配置，对应 %AppData%/hs2-tools/settings.json。
+/// 统一应用配置，对应数据目录下的 settings.json（绿色版 data/ 优先，见 ConfigService.DefaultConfigDir）。
 /// 替代原版的 IndexedDB / localStorage / Go 端 JSON 三处分散存储。
 /// 多游戏：游戏路径/收藏/本地 Mod 缓存/使用统计按游戏隔离在 Games 下，
 /// CurrentGame 指向当前生效的游戏档案（GameProfiles 注册表）。

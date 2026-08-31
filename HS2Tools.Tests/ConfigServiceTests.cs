@@ -268,4 +268,50 @@ public class ConfigServiceTests : IDisposable
         Assert.Equal("", config.Settings.Current.GamePath); // Current 就地创建空数据
         Assert.Equal("{}", File.ReadAllText(path));
     }
+
+    // ---- 绿色版数据目录 ----
+
+    [Fact]
+    public void ResolveConfigDir_WritableDir_ReturnsIt_AndCleansProbe()
+    {
+        var installDir = Path.Combine(_dir, "data");
+        Assert.Equal(installDir, ConfigService.ResolveConfigDir(installDir));
+        Assert.True(Directory.Exists(installDir));
+        Assert.Empty(Directory.GetFiles(installDir)); // 探测文件已删
+    }
+
+    [Fact]
+    public void ResolveConfigDir_Unwritable_FallsBackToAppData()
+    {
+        // 用一个文件当父路径使 CreateDirectory 必失败，模拟无写权限。
+        // 日志走 ErrorLog（全局静态、并行测试可能并发写），此处只断言回退结果，日志留痕由 ErrorLog 自身保证。
+        var blocker = Path.Combine(_dir, "file-not-dir");
+        File.WriteAllText(blocker, "");
+        Assert.Equal(ConfigService.AppDataConfigDir, ConfigService.ResolveConfigDir(Path.Combine(blocker, "data")));
+    }
+
+    [Fact]
+    public void MigrateFromAppData_CopiesSettingsAndSideload_SkipsExisting()
+    {
+        var src = Path.Combine(_dir, "appdata");
+        var dst = Path.Combine(_dir, "data");
+        Directory.CreateDirectory(src);
+        Directory.CreateDirectory(dst);
+        File.WriteAllText(Path.Combine(src, "settings.json"), """{"currentGame":"kk"}""");
+        File.WriteAllText(Path.Combine(src, "sideload-hs2.json"), "[]");
+        File.WriteAllText(Path.Combine(dst, "settings.json"), """{"currentGame":"hs2"}"""); // 已有则不覆盖
+
+        ConfigService.MigrateFromAppData(dst, src);
+
+        Assert.Equal("""{"currentGame":"hs2"}""", File.ReadAllText(Path.Combine(dst, "settings.json")));
+        Assert.Equal("[]", File.ReadAllText(Path.Combine(dst, "sideload-hs2.json")));
+    }
+
+    [Fact]
+    public void MigrateFromAppData_SameDir_NoOp()
+    {
+        File.WriteAllText(Path.Combine(_dir, "settings.json"), "{}");
+        ConfigService.MigrateFromAppData(_dir, _dir); // 回退目录即源目录：不自我复制、不抛错
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(_dir, "settings.json")));
+    }
 }

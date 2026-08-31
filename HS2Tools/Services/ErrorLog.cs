@@ -1,7 +1,7 @@
 namespace HS2Tools.Services;
 
 /// <summary>
-/// 统一错误日志：追加写入 %AppData%/hs2-tools/error.log。
+/// 统一错误日志：追加写入配置目录（见 ConfigService.DefaultConfigDir）下的 error.log。
 /// 迁移约定（方案 §9）：原版"静默吞错"点位迁移时至少记日志。
 /// 自身永不抛出（日志失败不二次抛错）。
 /// </summary>

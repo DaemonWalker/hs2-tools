@@ -5,8 +5,9 @@ namespace HS2Tools.Services;
 
 /// <summary>
 /// 统一配置服务（对应迁移方案 §7）。
-/// 读写 %AppData%/hs2-tools/settings.json，强类型 AppSettings；
-/// 改动即发 Changed 事件并防抖落盘。
+/// 读写 settings.json，强类型 AppSettings；改动即发 Changed 事件并防抖落盘。
+/// 数据目录（绿色版）：优先程序所在目录下 data/，无写权限（如 Program Files）回退 %AppData%/hs2-tools；
+/// 首次启动时旧 %AppData% 配置自动迁移到安装目录。
 /// 多游戏：exe 名/相对目录等游戏特定知识已收编到 GameProfiles（Models/GameProfile.cs），
 /// 本类只按当前游戏（Settings.CurrentGame）求值。
 /// </summary>
@@ -33,6 +34,9 @@ public class ConfigService : IDisposable
     {
         _configDir = configDir ?? DefaultConfigDir;
         Directory.CreateDirectory(_configDir);
+        // 仅默认目录（绿色版）时触发旧 %AppData% 迁移；测试显式传目录不迁移
+        if (configDir is null)
+            MigrateFromAppData(_configDir, AppDataConfigDir);
         var migrated = false;
         Settings = Load(ref migrated);
         _saveTimer = new Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
@@ -41,8 +45,67 @@ public class ConfigService : IDisposable
             Save();
     }
 
-    public static string DefaultConfigDir =>
+    private static string? _defaultConfigDir;
+
+    /// <summary>旧版 %AppData% 配置目录（绿色版迁移来源；安装目录无写权限时的回退目标）</summary>
+    public static string AppDataConfigDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "hs2-tools");
+
+    /// <summary>默认配置目录：程序所在目录下 data/（绿色版），无写权限时回退 <see cref="AppDataConfigDir"/></summary>
+    public static string DefaultConfigDir =>
+        _defaultConfigDir ??= ResolveConfigDir(Path.Combine(AppContext.BaseDirectory, "data"));
+
+    /// <summary>探测 installDataDir 可写则返回它，否则回退 %AppData%（留痕）。internal 供测试。</summary>
+    internal static string ResolveConfigDir(string installDataDir)
+    {
+        try
+        {
+            Directory.CreateDirectory(installDataDir);
+            var probe = Path.Combine(installDataDir, ".write-probe");
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return installDataDir;
+        }
+        catch (Exception ex)
+        {
+            // 先赋值再记日志：ErrorLog 落盘路径依赖 DefaultConfigDir，避免递归重入
+            _defaultConfigDir = AppDataConfigDir;
+            ErrorLog.Log($"安装目录不可写，配置回退 %AppData%: {ex.Message}");
+            return AppDataConfigDir;
+        }
+    }
+
+    /// <summary>
+    /// 绿色版首次迁移：appDataDir 中的 settings.json 与 sideload*.json 复制到 configDir（已存在则跳过）。
+    /// configDir 即 %AppData% 回退目录时不迁移。internal 供测试。
+    /// </summary>
+    internal static void MigrateFromAppData(string configDir, string appDataDir)
+    {
+        if (string.Equals(configDir, appDataDir, StringComparison.OrdinalIgnoreCase))
+            return;
+        try
+        {
+            if (!Directory.Exists(appDataDir))
+                return;
+            var names = new List<string> { SettingsFileName };
+            names.AddRange(Directory.GetFiles(appDataDir, "sideload*.json").Select(f => Path.GetFileName(f)!));
+            foreach (var name in names)
+            {
+                var src = Path.Combine(appDataDir, name);
+                var dst = Path.Combine(configDir, name);
+                if (File.Exists(src) && !File.Exists(dst))
+                {
+                    File.Copy(src, dst);
+                    ErrorLog.Log($"已从 %AppData% 迁移配置: {name}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // 迁移失败不阻断启动（可从空配置起步），但留痕
+            ErrorLog.Log($"从 %AppData% 迁移配置失败: {ex.Message}");
+        }
+    }
 
     /// <summary>配置目录（settings.json 与 sideload.json 所在目录）</summary>
     public string ConfigDir => _configDir;
