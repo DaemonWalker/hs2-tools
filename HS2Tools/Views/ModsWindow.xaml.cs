@@ -19,6 +19,19 @@ public partial class ModsWindow : Window
         if (App.Services is not { } s)
             return; // 测试环境（无 Application）
 
-        DataContext = new ModsWindowViewModel(s.Config, s.Scanner);
+        var vm = new ModsWindowViewModel(s.Config, s.Scanner);
+
+        // 去重确认框（仿主窗口停止爬虫确认模式）
+        vm.DedupConfirmationRequested += (_, msg) =>
+        {
+            var result = MessageBox.Show(this, msg,
+                "确认去重？", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result == MessageBoxResult.Yes)
+                _ = vm.ConfirmDedupAsync();
+        };
+        vm.DedupMessageRequested += (_, msg) =>
+            MessageBox.Show(this, msg, "Mod 去重", MessageBoxButton.OK, MessageBoxImage.Information);
+
+        DataContext = vm;
     }
 }

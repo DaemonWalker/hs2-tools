@@ -277,8 +277,12 @@ public partial class MainWindowViewModel : ObservableObject
         {
             var batch = files.GetRange(i, Math.Min(BatchSize, files.Count - i));
             var batchResult = await _scanner.ReadZipModBatchAsync(batch, onError: LogScanError);
+            // 跨批合并同 guid：按去重规则裁决取最优（与 ReadZipModBatchAsync 批内口径一致）
             foreach (var (guid, info) in batchResult)
-                result[guid] = info;
+            {
+                if (!result.TryGetValue(guid, out var existing) || ScannerService.CompareModsForKeep(info, existing) < 0)
+                    result[guid] = info;
+            }
             ModScanProgress = $"{Math.Min(i + BatchSize, files.Count)}/{files.Count}";
         }
         return result;

@@ -54,11 +54,31 @@ public partial class ModsWindowViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
+    [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
     [NotifyPropertyChangedFor(nameof(RefreshButtonText))]
     [NotifyPropertyChangedFor(nameof(EmptyText))]
     private bool _isRefreshing;
 
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
+    [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyPropertyChangedFor(nameof(DedupButtonText))]
+    private bool _isDeduping;
+
     public string RefreshButtonText => IsRefreshing ? "扫描中..." : "刷新模组列表";
+
+    public string DedupButtonText => IsDeduping ? "去重中..." : "去重 Mods";
+
+    /// <summary>请求用户确认去重（View 订阅弹确认框，确认后调 <see cref="ConfirmDedupAsync"/>）</summary>
+    public event EventHandler<string>? DedupConfirmationRequested;
+
+    /// <summary>去重普通提示（无重复 / 完成汇总等，View 订阅弹 MessageBox）</summary>
+    public event EventHandler<string>? DedupMessageRequested;
+
+    // 去重待执行计划（确认后由 ConfirmDedupAsync 消费）
+    private Dictionary<string, ModInfo>? _pendingWinners;
+    private List<ModInfo>? _pendingLosers;
+    private string? _pendingDupDir;
 
     public bool IsEmpty => Mods.Count == 0;
 
@@ -115,7 +135,9 @@ public partial class ModsWindowViewModel : ObservableObject
         }
     }
 
-    private bool CanRefresh() => !IsRefreshing;
+    private bool CanRefresh() => !IsRefreshing && !IsDeduping;
+
+    private bool CanDedup() => !IsRefreshing && !IsDeduping;
 
     /// <summary>
     /// 刷新（对应原版 scanMods）：ScanDirectory(.zipmod) + ReadZipModBatchAsync，
@@ -143,4 +165,131 @@ public partial class ModsWindowViewModel : ObservableObject
     }
 
     private static void LogScanError(string message) => App.LogException(new Exception(message));
+
+    /// <summary>
+    /// 去重（分析阶段）：重扫 mods 目录，同 guid 按规则（版本高 → 体积大 → 日期新）裁决，
+    /// 发现重复则暂存计划并请求确认；确认后由 <see cref="ConfirmDedupAsync"/> 执行移动。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanDedup))]
+    private async Task DedupAsync()
+    {
+        IsDeduping = true;
+        try
+        {
+            var modsDir = _config.GetModsDir();
+            var gamePath = _config.Settings.Current.GamePath;
+            if (modsDir is null || string.IsNullOrEmpty(gamePath))
+            {
+                DedupMessageRequested?.Invoke(this, "请先设置游戏目录");
+                return;
+            }
+
+            var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } });
+            var entries = await _scanner.ReadZipModBatchListAsync(files, onError: LogScanError);
+
+            var winners = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
+            var losers = new List<ModInfo>();
+            var groups = 0;
+            foreach (var group in entries.GroupBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var ordered = group.Select(kv => kv.Value)
+                    .OrderBy(m => m, Comparer<ModInfo>.Create(ScannerService.CompareModsForKeep))
+                    .ToList();
+                winners[group.Key] = ordered[0];
+                if (ordered.Count > 1)
+                {
+                    groups++;
+                    losers.AddRange(ordered.Skip(1));
+                }
+            }
+
+            if (losers.Count == 0)
+            {
+                DedupMessageRequested?.Invoke(this, "没有发现重复的 Mods");
+                return;
+            }
+
+            _pendingWinners = winners;
+            _pendingLosers = losers;
+            _pendingDupDir = Path.Combine(gamePath, "duplicatemods");
+            DedupConfirmationRequested?.Invoke(this,
+                $"发现 {groups} 组重复 Mods，将把 {losers.Count} 个落选文件移动到游戏目录下的 duplicatemods 文件夹" +
+                "（保留规则：版本高 → 体积大 → 日期新）。是否继续？");
+        }
+        finally
+        {
+            IsDeduping = false;
+        }
+    }
+
+    /// <summary>去重（执行阶段）：落选文件移入 duplicatemods，LocalMods 更新为各 guid 最优</summary>
+    public async Task ConfirmDedupAsync()
+    {
+        if (_pendingWinners is not { } winners || _pendingLosers is not { } losers || _pendingDupDir is not { } dupDir)
+            return;
+        _pendingWinners = null;
+        _pendingLosers = null;
+        _pendingDupDir = null;
+
+        IsDeduping = true;
+        var downloadDir = _config.GetModDownloadDir();
+        var (moved, failed, skipped) = (0, 0, 0);
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var loser in losers)
+                {
+                    // 下载目录内可能有进行中的下载，跳过不动
+                    if (downloadDir is not null &&
+                        loser.Path.StartsWith(downloadDir, StringComparison.OrdinalIgnoreCase))
+                    {
+                        skipped++;
+                        App.LogException(new Exception($"Dedup skip (in download dir): {loser.Path}"));
+                        continue;
+                    }
+                    try
+                    {
+                        _scanner.MoveFile(loser.Path, UniqueTargetPath(dupDir, loser.Path));
+                        moved++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        App.LogException(new Exception($"Dedup move failed: {loser.Path}: {ex.Message}"));
+                    }
+                }
+            });
+
+            _config.Update(s => s.Current.LocalMods = winners);
+
+            var summary = $"去重完成：已移动 {moved} 个文件到 duplicatemods";
+            if (skipped > 0)
+                summary += $"，跳过下载目录 {skipped} 个";
+            if (failed > 0)
+                summary += $"（{failed} 个失败）";
+            DedupMessageRequested?.Invoke(this, summary);
+        }
+        finally
+        {
+            IsDeduping = false;
+        }
+    }
+
+    /// <summary>duplicatemods 内的目标路径：同名已存在时追加 _2、_3 后缀</summary>
+    private static string UniqueTargetPath(string dir, string srcPath)
+    {
+        var name = Path.GetFileName(srcPath);
+        var target = Path.Combine(dir, name);
+        if (!File.Exists(target))
+            return target;
+        var stem = Path.GetFileNameWithoutExtension(name);
+        var ext = Path.GetExtension(name);
+        for (var i = 2; ; i++)
+        {
+            target = Path.Combine(dir, $"{stem}_{i}{ext}");
+            if (!File.Exists(target))
+                return target;
+        }
+    }
 }

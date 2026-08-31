@@ -441,6 +441,81 @@ public class ScannerService
         return sb.ToString().Trim();
     }
 
+    /// <summary>
+    /// 语义化版本比较：双方都解析成功（Trim + 去前导 v/V 后 Version.TryParse）才比较，
+    /// 否则返回 0（由调用方落到下一比较因子）。version 在 manifest 中不清洗，可能含 \t\n。
+    /// </summary>
+    internal static int CompareVersions(string a, string b)
+    {
+        if (!TryParseVersion(a, out var va) || !TryParseVersion(b, out var vb))
+            return 0;
+        // System.Version 缺失段为 -1，这里按 0 补齐逐段比较（"1.2" == "1.2.0"）
+        static int N(int v) => v < 0 ? 0 : v;
+        var c = va.Major.CompareTo(vb.Major);
+        if (c != 0)
+            return c;
+        c = va.Minor.CompareTo(vb.Minor);
+        if (c != 0)
+            return c;
+        c = N(va.Build).CompareTo(N(vb.Build));
+        if (c != 0)
+            return c;
+        return N(va.Revision).CompareTo(N(vb.Revision));
+    }
+
+    private static bool TryParseVersion(string s, out Version v)
+    {
+        s = s.Trim();
+        if (s.Length > 0 && s[0] is 'v' or 'V')
+            s = s[1..];
+        return Version.TryParse(s, out v!);
+    }
+
+    /// <summary>
+    /// mod 去重裁决比较器（返回值同 IComparer：a 更优返回负）。
+    /// 优先级：版本号高 → 体积大 → 修改日期新；全平按路径词典序取确定结果。
+    /// 文件信息读取失败记 ErrorLog，该因子按 size=0 / DateTime.MinValue 处理。
+    /// </summary>
+    internal static int CompareModsForKeep(ModInfo a, ModInfo b)
+    {
+        var c = CompareVersions(a.Version, b.Version);
+        if (c != 0)
+            return -c; // 版本高者优
+        c = GetFileSize(a.Path).CompareTo(GetFileSize(b.Path));
+        if (c != 0)
+            return -c; // 体积大者优
+        c = GetLastWriteTime(a.Path).CompareTo(GetLastWriteTime(b.Path));
+        if (c != 0)
+            return -c; // 日期新者优
+        return string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static long GetFileSize(string path)
+    {
+        try
+        {
+            return new FileInfo(path).Length;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"GetFileSize failed: {path}: {ex.Message}");
+            return 0;
+        }
+    }
+
+    private static DateTime GetLastWriteTime(string path)
+    {
+        try
+        {
+            return File.GetLastWriteTime(path);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"GetLastWriteTime failed: {path}: {ex.Message}");
+            return DateTime.MinValue;
+        }
+    }
+
     /// <summary>解析 zipmod 文件，提取 manifest.xml 中的信息（guid/name 清洗、version 不清洗）</summary>
     public Dictionary<string, ModInfo> ReadZipMod(string filePath)
     {
@@ -507,19 +582,33 @@ public class ScannerService
         return el?.Value;
     }
 
-    /// <summary>批量解析 zipmod 文件（默认并发 4）。单文件失败跳过（记日志）；重复 guid 覆盖</summary>
+    /// <summary>批量解析 zipmod 文件（默认并发 4）。单文件失败跳过（记日志）；重复 guid 按 <see cref="CompareModsForKeep"/> 裁决取最优（版本高 → 体积大 → 日期新）</summary>
     public async Task<Dictionary<string, ModInfo>> ReadZipModBatchAsync(
+        IReadOnlyList<string> filePaths, int concurrency = 4, Action<string>? onError = null, CancellationToken ct = default)
+    {
+        var entries = await ReadZipModBatchListAsync(filePaths, concurrency, onError, ct);
+        var results = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (guid, info) in entries)
+        {
+            if (!results.TryGetValue(guid, out var existing) || CompareModsForKeep(info, existing) < 0)
+                results[guid] = info;
+        }
+        return results;
+    }
+
+    /// <summary>批量解析 zipmod 文件（默认并发 4），返回全部 (guid, ModInfo) 列表（不折叠重复 guid）。单文件失败跳过（记日志）</summary>
+    public async Task<List<KeyValuePair<string, ModInfo>>> ReadZipModBatchListAsync(
         IReadOnlyList<string> filePaths, int concurrency = 4, Action<string>? onError = null, CancellationToken ct = default)
     {
         if (concurrency <= 0)
             concurrency = 4;
-        var results = new ConcurrentDictionary<string, ModInfo>();
+        var results = new ConcurrentBag<KeyValuePair<string, ModInfo>>();
         await Parallel.ForEachAsync(filePaths, new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = ct }, (path, _) =>
         {
             try
             {
-                foreach (var (guid, info) in ReadZipMod(path))
-                    results[guid] = info;
+                foreach (var kv in ReadZipMod(path))
+                    results.Add(kv);
             }
             catch (Exception ex)
             {
@@ -527,7 +616,7 @@ public class ScannerService
             }
             return ValueTask.CompletedTask;
         });
-        return new Dictionary<string, ModInfo>(results);
+        return new List<KeyValuePair<string, ModInfo>>(results);
     }
 
     // ==================== 文件操作 ====================

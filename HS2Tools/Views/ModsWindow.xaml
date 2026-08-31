@@ -72,8 +72,12 @@
                              IsChecked="{Binding ShowUnusedOnly, Mode=TwoWay}"
                              Foreground="{DynamicResource ForegroundBrush}"/>
             </StackPanel>
-            <Button Grid.Column="1" Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}"
-                    Padding="12,4"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="{Binding DedupButtonText}" Command="{Binding DedupCommand}"
+                        Padding="12,4" Margin="0,0,8,0"/>
+                <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}"
+                        Padding="12,4"/>
+            </StackPanel>
         </Grid>
 
         <!-- 模组表格（列可点击排序、行虚拟化） -->
