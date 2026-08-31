@@ -11,8 +11,10 @@ namespace HS2Tools.Services;
 ///
 /// ChaFile blob 布局（BinaryWriter 序列化）：
 /// int32 loadProductNo → 7bit 前缀字符串卡头标记 → 7bit 前缀版本字符串
-/// → int32 lang → 7bit 前缀 userID → 7bit 前缀 dataID
-/// → int32 BlockHeader 字节数 → BlockHeader msgpack（{ "lstInfo": [ [name, version, pos, size], ... ] }）
+/// → HS2：int32 lang → 7bit 前缀 userID → 7bit 前缀 dataID；
+///   KK/KKS：int32 facePng 长度 + 脸部 PNG 字节（无 lang/userID/dataID，真实卡实测）
+/// → int32 BlockHeader 字节数 → BlockHeader msgpack（{ "lstInfo": [ [name, version, pos, size], ... ] }，
+///   KK 真实卡为 map 形式 {name, version, pos, size}，两种都认）
 /// → int64 块数据总长度 → 各块数据（pos/size 相对于块数据区起点）。
 ///
 /// 多游戏（GameProfiles）：HS2 卡头【AIS_Chara】/【AIS_Clothes】，KK/KKS 卡头
@@ -24,12 +26,14 @@ namespace HS2Tools.Services;
 /// </summary>
 internal static class CharaCardParser
 {
-    /// <summary>一套卡片格式：角色卡/坐标卡标记 + Parameter 块名字段键</summary>
+    /// <summary>一套卡片格式：角色卡/坐标卡标记 + Parameter 块名字段键 + blob 信封差异</summary>
     private sealed class CardFormat
     {
         public required byte[] CharaMarker;
         public required byte[] ClothesMarker;
         public required string[] NameKeys;
+        /// <summary>true（KK/KKS）：version 后接脸部 PNG（int32 长度 + 字节），无 lang/userID/dataID</summary>
+        public required bool HasFacePng;
     }
 
     // 格式表从 GameProfiles 派生（KK/KKS 标记相同，按 CharaMarker 去重）
@@ -48,6 +52,7 @@ internal static class CharaCardParser
                 CharaMarker = charaMarker,
                 ClothesMarker = Encoding.UTF8.GetBytes(p.ClothesMarker),
                 NameKeys = p.NameKeys,
+                HasFacePng = p.CharaBlobHasFacePng,
             });
         }
         return list.ToArray();
@@ -61,7 +66,7 @@ internal static class CharaCardParser
     private static readonly byte[] KkexMark = "KKEx"u8.ToArray();
 
     /// <summary>
-    /// 解析数据区（最后一个 IEND + 4 字节 CRC 之后的部分）。
+    /// 解析数据区（真 IEND chunk 之后的部分，见 ScannerService.GetDataRegionOffset）。
     /// 单卡 1 个 blob、场景 N 个内嵌 blob，统一处理；末尾再尝试 KKEx trailer。
     /// 名字/ModID 按出现顺序去重；单个 blob 失败记 ErrorLog 并继续；
     /// 全部 blob 失败或无标记 → StructuralOk=false（调用方走回退路径）。
@@ -147,9 +152,21 @@ internal static class CharaCardParser
 
         var p = markerPos + marker.Length;
         _ = Read7BitString(region, ref p); // ChaFileVersion
-        _ = ReadInt32LE(region, ref p);    // lang
-        _ = Read7BitString(region, ref p); // userID
-        _ = Read7BitString(region, ref p); // dataID
+        if (format.HasFacePng)
+        {
+            // KK/KKS：version 之后是脸部特写 PNG（int32 长度 + 字节），随后直接是 BlockHeader，
+            // 无 HS2 的 lang/userID/dataID（基准 kkloader KoikatuCharaData；真实卡实测确认）
+            var faceLen = ReadInt32LE(region, ref p);
+            if (faceLen < 0 || faceLen > region.Length - p)
+                throw new InvalidDataException("face png length out of bounds");
+            p += faceLen;
+        }
+        else
+        {
+            _ = ReadInt32LE(region, ref p);    // lang
+            _ = Read7BitString(region, ref p); // userID
+            _ = Read7BitString(region, ref p); // dataID
+        }
 
         var headerLen = ReadInt32LE(region, ref p);
         if (headerLen <= 0 || headerLen > region.Length - p)

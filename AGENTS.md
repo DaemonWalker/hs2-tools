@@ -51,7 +51,7 @@ dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
 - **状态下沉服务层单例**，Window 只是视图；跨窗体通信走服务事件；VM/窗口与服务同寿，永久订阅。
 - **游戏特定知识集中在 GameProfiles**（exe 名、目录相对路径、卡片标记字节、Parameter 名字段键、sideload 数据源与 base URL）；服务层一律经 `ConfigService.CurrentProfile` 按当前游戏求值，不得另写游戏常量。卡片解析按卡头标记自动识别格式（HS2【AIS_Chara】与 KK/KKS【KoiKatuChara】都认，不依赖当前游戏）。KK/KKS 的 exe 名按常见安装版填写，待真实环境验证。
 - **行为保真**：扫描/下载/爬虫逻辑按既定行为 1:1 复刻（字节级 hack 全部保留，注释注明出处）；网络/编码边界行为有既定口径，改动前先读相关注释与测试。
-- **卡片/场景解析**：以 IllusionModdingAPI/BepisPlugins（KK/KKS 参照 kkloader）为基准做结构化解析（`CharaCardParser`：BlockHeader + KKEx/UAR，MessagePack-CSharp 底层 Reader/Writer）；旧字节扫描（`SearchBuffer`）仅作数据区内回退路径（HS2 与 KK 字段名都认），不再全文件扫描。
+- **卡片/场景解析**：以 IllusionModdingAPI/BepisPlugins（KK/KKS 参照 kkloader）为基准做结构化解析（`CharaCardParser`：BlockHeader + KKEx/UAR，MessagePack-CSharp 底层 Reader/Writer）；旧字节扫描（`SearchBuffer`）仅作数据区内回退路径（HS2 与 KK 字段名都认），不再全文件扫描。数据区起点 = 真 IEND chunk（PNG chunk 步行定位；反向字节扫描仅作非 PNG/损坏文件回退——追加的游戏数据可能碰巧含 "IEND" 字节，反扫会误判截断点）。blob 信封按游戏分两种（`GameProfile.CharaBlobHasFacePng`）：HS2 = version + lang/userID/dataID；KK/KKS = version + facePng（int32 长度 + 字节），无 lang/userID/dataID（真实卡实测）。
 - 不得"静默吞错"：跳过的条目、失败的任务至少 `ErrorLog` 记一条；用户可见失败统一"XX失败：原因"。
 - 长任务（扫描/补全/爬虫/整理）防重入：CanExecute + 标志位双保险；取消一律 CancellationTokenSource。
 - 测试夹具程序化合成（PNG 标记字节 / zipmod），不提交大文件；ErrorLog 在测试中统一重定向临时目录。

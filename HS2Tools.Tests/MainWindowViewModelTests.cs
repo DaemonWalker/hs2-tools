@@ -396,6 +396,69 @@ public class MainWindowViewModelTests : IDisposable
         Assert.Equal(1, config.Settings.Current.ModUsage["g-both"]); // 场景计 2，被角色计 1 覆盖
     }
 
+    [Fact]
+    public async Task Scan_UnusedMods_Counted_ReferencedConfirmedMoveBack()
+    {
+        var gameDir = MakeGameDir();
+        var unusedDir = Path.Combine(gameDir, "unusedmods");
+        Directory.CreateDirectory(unusedDir);
+        // unusedmods：g-moved 被人物卡引用（候选）、g-keep 无人引用、g-dup 与 mods 里同 GUID（重复，不移回）
+        TestAssets.WriteZipmod(Path.Combine(gameDir, "mods"), "dup.zipmod", TestAssets.MakeManifest("g-dup", "Dup"));
+        TestAssets.WriteZipmod(unusedDir, "moved.zipmod", TestAssets.MakeManifest("g-moved", "Moved"));
+        TestAssets.WriteZipmod(unusedDir, "keep.zipmod", TestAssets.MakeManifest("g-keep", "Keep"));
+        TestAssets.WriteZipmod(unusedDir, "dup2.zipmod", TestAssets.MakeManifest("g-dup", "Dup2"));
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.ModMarker("g-moved"));
+
+        using var config = new ConfigService(_dir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.GamePath = gameDir;
+
+        string? confirmMsg = null;
+        vm.MoveBackConfirmationRequested += (_, msg) => confirmMsg = msg;
+        await vm.ScanCommand.ExecuteAsync(null);
+
+        Assert.True(vm.ScanCompleted);
+        Assert.Equal(3, vm.UnusedModCount); // unusedmods 全部 3 个 GUID 计入"未使用"
+        Assert.NotNull(confirmMsg);
+        Assert.Contains("1 个", confirmMsg); // 候选仅 g-moved
+        Assert.False(config.Settings.Current.LocalMods.ContainsKey("g-moved")); // 确认前不动
+
+        var (moved, failed) = await vm.ConfirmMoveBackAsync();
+        Assert.Equal((1, 0), (moved, failed));
+        Assert.True(File.Exists(Path.Combine(gameDir, "mods", "moved.zipmod")));
+        Assert.True(config.Settings.Current.LocalMods.ContainsKey("g-moved"));
+        Assert.Equal("Moved", config.Settings.Current.LocalMods["g-moved"].Name);
+        Assert.Equal(2, vm.UnusedModCount);
+        // 未引用与同 GUID 重复的原地不动
+        Assert.True(File.Exists(Path.Combine(unusedDir, "keep.zipmod")));
+        Assert.True(File.Exists(Path.Combine(unusedDir, "dup2.zipmod")));
+    }
+
+    [Fact]
+    public async Task Scan_UnusedModsNothingReferenced_NoConfirmation()
+    {
+        var gameDir = MakeGameDir();
+        var unusedDir = Path.Combine(gameDir, "unusedmods");
+        Directory.CreateDirectory(unusedDir);
+        TestAssets.WriteZipmod(unusedDir, "keep.zipmod", TestAssets.MakeManifest("g-keep", "Keep"));
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.ModMarker("g-other"));
+
+        using var config = new ConfigService(_dir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.GamePath = gameDir;
+
+        var fired = false;
+        vm.MoveBackConfirmationRequested += (_, _) => fired = true;
+        await vm.ScanCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, vm.UnusedModCount);
+        Assert.False(fired);
+        Assert.Equal((0, 0), await vm.ConfirmMoveBackAsync()); // 无待执行清单
+        Assert.True(File.Exists(Path.Combine(unusedDir, "keep.zipmod")));
+    }
+
     // ==================== Sideloader 更新 ====================
 
     [Fact]

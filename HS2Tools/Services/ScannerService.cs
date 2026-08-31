@@ -169,13 +169,51 @@ public class ScannerService
         return wantNames ? SearchNames(data) : SearchBuffer(ModStart, ModEnd, data);
     }
 
-    /// <summary>数据区起点 = 最后一个 IEND 的 'D' 之后 + 4 字节 CRC（越界钳制）；无 IEND 返回 -1</summary>
-    internal static int GetDataRegionOffset(byte[] data)
+    /// <summary>
+    /// 数据区起点 = PNG 真 IEND chunk 之后（正规 chunk 步行：length BE + type + data + CRC）。
+    /// 追加的游戏数据里可能碰巧含 "IEND" 字节（KK 卡内嵌脸部 PNG / KKEx 二进制），
+    /// 反向字节扫描会误判截断点，故优先 chunk 步行；签名不符或步行失败（非 PNG / 截断文件）
+    /// 回退旧的"最后一个 IEND"字节扫描；仍无 → -1。
+    /// </summary>
+    internal static int GetDataRegionOffset(byte[] data) => FindPngEnd(data);
+
+    /// <summary>
+    /// PNG 结束偏移（真 IEND chunk 的 CRC 之后）：chunk 步行成功直接返回；
+    /// 签名不符/步行失败回退反向字节扫描（'D' 之后 + 4 字节 CRC）；找不到返回 -1。
+    /// </summary>
+    internal static int FindPngEnd(byte[] data)
     {
+        var walked = WalkPngChunks(data);
+        if (walked >= 0)
+            return walked;
         var iend = FindLastIend(data);
-        if (iend < 0)
+        return iend < 0 ? -1 : Math.Min(iend + 4, data.Length);
+    }
+
+    // PNG 签名
+    private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+
+    /// <summary>
+    /// 正规 PNG chunk 步行：签名后逐个 chunk（int32 BE 长度 + 4 字节类型 + 数据 + 4 字节 CRC），
+    /// 返回真 IEND chunk 之后（含 CRC）的偏移；签名不符、结构损坏或无 IEND 返回 -1。
+    /// </summary>
+    private static int WalkPngChunks(byte[] data)
+    {
+        if (data.Length < PngSignature.Length || !data.AsSpan(0, PngSignature.Length).SequenceEqual(PngSignature))
             return -1;
-        return Math.Min(iend + 4, data.Length);
+        var p = PngSignature.Length;
+        while (p + 8 <= data.Length)
+        {
+            var len = (data[p] << 24) | (data[p + 1] << 16) | (data[p + 2] << 8) | data[p + 3];
+            var next = p + 8 + len + 4; // length+type + data + CRC
+            if (len < 0 || next > data.Length)
+                return -1;
+            if (data[p + 4] == (byte)'I' && data[p + 5] == (byte)'E'
+                && data[p + 6] == (byte)'N' && data[p + 7] == (byte)'D')
+                return next;
+            p = next;
+        }
+        return -1;
     }
 
     /// <summary>
@@ -255,17 +293,17 @@ public class ScannerService
             return "";
         }
 
-        var endIndex = FindLastIend(data);
-        if (endIndex < 0)
+        var end = FindPngEnd(data);
+        if (end < 0)
             return "";
 
-        // 截取纯 PNG 图像数据（含 IEND 的 4 字节 CRC，得到完整 PNG；越界钳制）
-        var end = Math.Min(endIndex + 4, data.Length);
+        // 截取纯 PNG 图像数据（真 IEND chunk 含 CRC，得到完整 PNG）
         return Convert.ToBase64String(data, 0, end);
     }
 
     /// <summary>
     /// 从文件末尾反向搜索最后一个 "IEND"，截断点 = 'D' 之后（覆盖 CRC）。
+    /// 仅作 FindPngEnd 的回退：追加数据里可能碰巧含 "IEND" 字节，字节扫描会误判，正常卡片不走这里。
     /// 找不到返回 -1。
     /// </summary>
     internal static int FindLastIend(byte[] data)
@@ -285,11 +323,9 @@ public class ScannerService
             throw new InvalidDataException("not a valid PNG file");
 
         var data = File.ReadAllBytes(filePath);
-        var iendIndex = FindLastIend(data);
-        if (iendIndex < 0)
+        var offset = FindPngEnd(data);
+        if (offset < 0)
             throw new InvalidDataException("IEND marker not found");
-
-        var offset = Math.Min(iendIndex + 4, data.Length);
         var (names, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsSpan(offset));
         if (!structuralOk)
         {
@@ -303,8 +339,8 @@ public class ScannerService
         {
             ModIDs = modIds,
             CharaNames = names,
-            // 真正的追加数据长度（IEND 'D' 之后 + 4 字节 CRC），下界钳 0
-            GameDataLen = Math.Max(0, data.Length - (iendIndex + 4)),
+            // 真正的追加数据长度（真 IEND chunk 之后），下界钳 0
+            GameDataLen = Math.Max(0, data.Length - offset),
         };
     }
 
@@ -396,11 +432,10 @@ public class ScannerService
                 return null;
             }
             names = ExtractFromGameData(data, wantNames: true);
-            var endIndex = FindLastIend(data);
-            if (endIndex >= 0)
+            var end = FindPngEnd(data);
+            if (end >= 0)
             {
-                // 缩略图含 IEND 的 4 字节 CRC（完整 PNG；越界钳制）
-                var end = Math.Min(endIndex + 4, data.Length);
+                // 缩略图 = 真 IEND chunk（含 CRC）为止的完整 PNG
                 image = Convert.ToBase64String(data, 0, end);
             }
         }
@@ -628,6 +663,23 @@ public class ScannerService
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
         File.Move(src, dst);
+    }
+
+    /// <summary>目录内不冲突的目标路径：同名已存在时追加 _2、_3 后缀</summary>
+    internal static string UniqueTargetPath(string dir, string srcPath)
+    {
+        var name = Path.GetFileName(srcPath);
+        var target = Path.Combine(dir, name);
+        if (!File.Exists(target))
+            return target;
+        var stem = Path.GetFileNameWithoutExtension(name);
+        var ext = Path.GetExtension(name);
+        for (var i = 2; ; i++)
+        {
+            target = Path.Combine(dir, $"{stem}_{i}{ext}");
+            if (!File.Exists(target))
+                return target;
+        }
     }
 
     /// <summary>检查并创建目标目录</summary>

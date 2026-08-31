@@ -43,6 +43,13 @@ public class GameProfile
     /// <summary>Parameter 块中角色名的字段键（按序拼接，HS2 为 fullname；KK/KKS 为 lastname+firstname）</summary>
     public required string[] NameKeys { get; init; }
 
+    /// <summary>
+    /// 角色卡 blob 信封差异：true（KK/KKS）= version 之后是脸部特写 PNG（int32 长度 + 字节），
+    /// 随后直接是 BlockHeader；false（HS2）= version 之后是 lang/userID/dataID，无脸部 PNG。
+    /// （KK 真实卡实测：productNo→【KoiKatuChara】→version→facePng→BlockHeader，无 lang/userID/dataID）
+    /// </summary>
+    public required bool CharaBlobHasFacePng { get; init; }
+
     /// <summary>Sideload 数据源 ID（数据库文件归属）：HS2 独占 "hs2"；KK/KKS 共享 KKEC 库 "kkec"</summary>
     public required string SideloadSourceId { get; init; }
 
@@ -66,6 +73,7 @@ public static class GameProfiles
         CharaMarker = "【AIS_Chara】",
         ClothesMarker = "【AIS_Clothes】",
         NameKeys = ["fullname"],
+        CharaBlobHasFacePng = false,
         SideloadSourceId = "hs2",
         SideloadBaseUrl = "https://sideload.betterrepack.com/download/AISHS2/",
     };
@@ -83,6 +91,7 @@ public static class GameProfiles
         CharaMarker = "【KoiKatuChara】",
         ClothesMarker = "【KoiKatuClothes】",
         NameKeys = ["lastname", "firstname"],
+        CharaBlobHasFacePng = true,
         SideloadSourceId = "kkec",
         SideloadBaseUrl = "https://sideload.betterrepack.com/download/KKEC/",
     };
@@ -100,6 +109,7 @@ public static class GameProfiles
         CharaMarker = "【KoiKatuChara】",
         ClothesMarker = "【KoiKatuClothes】",
         NameKeys = ["lastname", "firstname"],
+        CharaBlobHasFacePng = true,
         SideloadSourceId = "kkec",
         SideloadBaseUrl = "https://sideload.betterrepack.com/download/KKEC/",
     };

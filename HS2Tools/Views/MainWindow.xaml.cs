@@ -34,6 +34,19 @@ public partial class MainWindow : Window
                 vm.ConfirmStopSideloader();
         };
 
+        // unusedmods 移回确认框（数据分析完成后，与整理功能的确认口径一致）
+        vm.MoveBackConfirmationRequested += async (_, msg) =>
+        {
+            var result = MessageBox.Show(this, msg,
+                "移回 unusedmods 中被引用的 Mod？", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes)
+                return;
+            var (moved, failed) = await vm.ConfirmMoveBackAsync();
+            MessageBox.Show(this,
+                failed > 0 ? $"已移回 {moved} 个，失败 {failed} 个（详见 error.log）" : $"已移回 {moved} 个",
+                "移回完成", MessageBoxButton.OK, MessageBoxImage.Information);
+        };
+
         DataContext = vm;
     }
 

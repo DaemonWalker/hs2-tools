@@ -40,18 +40,27 @@ internal static class TestAssets
     }
 
     // ==================== PNG 夹具 ====================
-    // 解析器不做 PNG 结构校验，直接构造字节：签名 + 占位块 + IEND + CRC + 游戏数据（含标记）
+    // 合法 chunk 帧结构（length BE + type + data + CRC），模拟真实卡片；CRC 不校验，填占位值
 
-    public static byte[] PngPrefix()
+    public static byte[] PngPrefix(byte[]? idatPayload = null)
     {
         using var ms = new MemoryStream();
         ms.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }); // PNG 签名
-        ms.Write("IHDR"u8.ToArray());
-        ms.Write(new byte[13]);
-        ms.Write("IDAT-placeholder"u8.ToArray());
-        ms.Write("IEND"u8.ToArray());
-        ms.Write(new byte[] { 0xAE, 0x42, 0x60, 0x82 }); // IEND CRC（缩略图截断时被丢弃）
+        WriteChunk(ms, "IHDR", new byte[13]);
+        WriteChunk(ms, "IDAT", idatPayload ?? "IDAT-placeholder"u8.ToArray());
+        WriteChunk(ms, "IEND", Array.Empty<byte>());
         return ms.ToArray();
+    }
+
+    private static void WriteChunk(MemoryStream ms, string type, byte[] payload)
+    {
+        ms.Write(BitConverter.IsLittleEndian
+            ? new[] { (byte)(payload.Length >> 24), (byte)(payload.Length >> 16), (byte)(payload.Length >> 8), (byte)payload.Length }
+            : BitConverter.GetBytes(payload.Length));
+        ms.Write(Encoding.ASCII.GetBytes(type));
+        ms.Write(payload);
+        // IEND 用真实 CRC（AE 42 60 82），其余占位
+        ms.Write(type == "IEND" ? new byte[] { 0xAE, 0x42, 0x60, 0x82 } : new byte[4]);
     }
 
     /// <summary>带角色名标记的游戏数据（HS2 回退模式：fullname..personality）</summary>
@@ -167,7 +176,8 @@ internal static class TestAssets
         return BuildBlob("【AIS_Chara】", infos);
     }
 
-    /// <summary>单个 KK ChaFile blob：信封布局与 HS2 相同，标记【KoiKatuChara】，Parameter 用 lastname/firstname</summary>
+    /// <summary>单个 KK ChaFile blob：KK 真实信封（version 后接 facePng，无 lang/userID/dataID），
+    /// 标记【KoiKatuChara】，Parameter 用 lastname/firstname，BlockHeader 用真实卡的 map 形式</summary>
     private static byte[] BuildKkCharaBlob(string lastName, string firstName, string[] guids)
     {
         var infos = new List<(string Name, byte[] Data)>
@@ -175,41 +185,36 @@ internal static class TestAssets
             ("Parameter", BuildKkNameBlock(lastName, firstName)),
             ("KKEx", BuildKkexBlock(guids)),
         };
-        return BuildBlob("【KoiKatuChara】", infos);
+        return BuildBlob("【KoiKatuChara】", infos, kkEnvelope: true);
     }
 
-    /// <summary>ChaFile blob 信封（BinaryWriter 布局，各游戏相同；差异仅在标记与块内容）</summary>
-    private static byte[] BuildBlob(string marker, List<(string Name, byte[] Data)> infos)
+    /// <summary>ChaFile blob 信封（BinaryWriter 布局）。kkEnvelope=false（HS2）：version + lang/userID/dataID；
+    /// true（KK/KKS，真实卡实测）：version + facePng（int32 长度 + 字节），无 lang/userID/dataID，
+    /// BlockHeader.Info 用 map 形式（真实 KK 卡即如此）。</summary>
+    private static byte[] BuildBlob(string marker, List<(string Name, byte[] Data)> infos, bool kkEnvelope = false)
     {
-        // BlockHeader msgpack（BlockHeader 是 [MessagePackObject(true)] map；Info 是数组式 4 元素）
-        var headerBuffer = new ArrayBufferWriter<byte>();
-        {
-            var w = new MessagePackWriter(headerBuffer);
-            w.WriteMapHeader(1);
-            w.Write("lstInfo");
-            w.WriteArrayHeader(infos.Count);
-            long pos = 0;
-            foreach (var (name, data) in infos)
-            {
-                w.WriteArrayHeader(4);
-                w.Write(name);
-                w.Write("1.0.0"); // block version
-                w.Write(pos);
-                w.Write((long)data.Length);
-                pos += data.Length;
-            }
-            w.Flush();
-        }
-        var headerBytes = headerBuffer.WrittenSpan.ToArray();
+        var headerBytes = BuildBlockHeader(infos, mapForm: kkEnvelope);
 
         using var ms = new MemoryStream();
         var bw = new BinaryWriter(ms);
         bw.Write(100);               // loadProductNo
         bw.Write(marker);            // 7bit 前缀标记
         bw.Write("1.0.0");           // ChaFileVersion
-        bw.Write(0);                 // lang
-        bw.Write("user");            // userID
-        bw.Write("data");            // dataID
+        if (kkEnvelope)
+        {
+            // 脸部特写 PNG：故意夹入 "IEND" 字节，回归"追加数据含 IEND 导致反向扫描误判截断点"的 bug
+            var facePng = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }
+                .Concat("IDAT-IEND-fake"u8.ToArray())
+                .ToArray();
+            bw.Write(facePng.Length);
+            bw.Write(facePng);
+        }
+        else
+        {
+            bw.Write(0);                 // lang
+            bw.Write("user");            // userID
+            bw.Write("data");            // dataID
+        }
         bw.Write(headerBytes.Length);
         bw.Write(headerBytes);
         bw.Write((long)infos.Sum(i => i.Data.Length)); // 块数据总长度
@@ -217,6 +222,46 @@ internal static class TestAssets
             bw.Write(data);
         bw.Flush();
         return ms.ToArray();
+    }
+
+    /// <summary>
+    /// BlockHeader msgpack { "lstInfo": [Info, ...] }。mapForm=false：Info 为数组式 4 元素
+    /// [name, version, pos, size]（HS2）；mapForm=true：Info 为 map {name, version, pos, size}（KK 真实卡）。
+    /// </summary>
+    private static byte[] BuildBlockHeader(List<(string Name, byte[] Data)> infos, bool mapForm)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var w = new MessagePackWriter(buffer);
+        w.WriteMapHeader(1);
+        w.Write("lstInfo");
+        w.WriteArrayHeader(infos.Count);
+        long pos = 0;
+        foreach (var (name, data) in infos)
+        {
+            if (mapForm)
+            {
+                w.WriteMapHeader(4);
+                w.Write("name");
+                w.Write(name);
+                w.Write("version");
+                w.Write("1.0.0");
+                w.Write("pos");
+                w.Write(pos);
+                w.Write("size");
+                w.Write((long)data.Length);
+            }
+            else
+            {
+                w.WriteArrayHeader(4);
+                w.Write(name);
+                w.Write("1.0.0"); // block version
+                w.Write(pos);
+                w.Write((long)data.Length);
+            }
+            pos += data.Length;
+        }
+        w.Flush();
+        return buffer.WrittenSpan.ToArray();
     }
 
     /// <summary>Parameter 块：msgpack map（字符串键），含 fullname + 干扰键</summary>

@@ -257,11 +257,9 @@ public class ScannerTests : IDisposable
     [Fact]
     public void ReadPngNames_MarkerInImageRegion_NotReported()
     {
-        // 回退路径不再扫 PNG 图像字节：图像区（IEND 之前）里的标记不命中，数据区里的才命中
-        var prefixHead = TestAssets.PngPrefix()[..^8]; // 去掉末尾 IEND + CRC
+        // 回退路径不再扫 PNG 图像字节：图像区（IDAT chunk 内）的标记不命中，数据区里的才命中
         var path = TestAssets.WritePng(_dir, "card.png",
-            prefixHead, TestAssets.NameMarker("图像区假名"),
-            "IEND"u8.ToArray(), new byte[] { 0xAE, 0x42, 0x60, 0x82 },
+            TestAssets.PngPrefix(TestAssets.NameMarker("图像区假名")),
             TestAssets.NameMarker("数据区真名"));
         var names = _svc.ReadPngNames(path);
         Assert.Equal(new[] { "数据区真名" }, names);
@@ -329,9 +327,9 @@ public class ScannerTests : IDisposable
     }
 
     [Fact]
-    public void ReadPngImage_TruncatesAtLastIend()
+    public void ReadPngImage_TruncatesAtRealIend()
     {
-        // 游戏数据里再放一个 "IEND"：必须取最后一个
+        // 游戏数据里碰巧含 "IEND" 字节：chunk 步行定位真 IEND，图像不被追加数据污染
         var prefix = TestAssets.PngPrefix();
         var tail = Encoding.UTF8.GetBytes("gamedata-IEND-more");
         var path = TestAssets.WritePng(_dir, "card.png", prefix, tail);
@@ -339,9 +337,33 @@ public class ScannerTests : IDisposable
         var base64 = _svc.ReadPngImage(path);
         var bytes = Convert.FromBase64String(base64);
 
-        // 期望：截到最后一个 IEND 的 'D' 之后 + 4 字节 CRC（完整 PNG）
-        var expectedLen = prefix.Length + "gamedata-".Length + "IEND".Length + 4;
-        Assert.Equal(expectedLen, bytes.Length);
+        Assert.Equal(prefix.Length, bytes.Length);
+    }
+
+    [Fact]
+    public void ReadPngImage_ChunkWalkFails_FallsBackToLastIend()
+    {
+        // 有 PNG 签名但 chunk 结构损坏：回退旧的"最后一个 IEND"字节扫描
+        var head = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }
+            .Concat(Encoding.UTF8.GetBytes("broken-chunks-IEND-more-IEND")).ToArray();
+        var path = TestAssets.WritePng(_dir, "card.png", head);
+
+        var base64 = _svc.ReadPngImage(path);
+        var bytes = Convert.FromBase64String(base64);
+
+        // 回退：截到最后一个 IEND 的 'D' 之后 + 4 字节 CRC（越界钳制到文件尾）
+        Assert.Equal(head.Length, bytes.Length);
+    }
+
+    [Fact]
+    public void ReadPngMods_KkCard_FacePngContainsIend_StillExtracts()
+    {
+        // 回归：KK 卡内嵌脸部 PNG / KKEx 二进制碰巧含 "IEND" 字节（真实卡 [Numb][SnowBreak] Cherno），
+        // 反向扫描曾把数据区截到文件尾 13KB，丢失全部名字与 mod
+        var path = TestAssets.WritePng(_dir, "kk.png",
+            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegion("白峰", "一乃", new[] { "com.kk.mod" }));
+        Assert.Equal(new[] { "白峰 一乃" }, _svc.ReadPngNames(path));
+        Assert.Equal(new[] { "com.kk.mod" }, _svc.ReadPngMods(path));
     }
 
     [Fact]

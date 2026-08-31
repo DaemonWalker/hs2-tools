@@ -255,8 +255,24 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="本地 Mods" Foreground="{DynamicResource ForegroundBrush}"/>
-                            <TextBlock Grid.Column="1" Text="{Binding ModCount, StringFormat={}{0:N0}}"
-                                       FontWeight="Bold" Foreground="{DynamicResource SuccessBrush}"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <TextBlock Text="{Binding ModCount, StringFormat={}{0:N0}}"
+                                           FontWeight="Bold" Foreground="{DynamicResource SuccessBrush}"/>
+                                <TextBlock Text="{Binding UnusedModCount, StringFormat=' （{0} 未使用）'}"
+                                           VerticalAlignment="Bottom"
+                                           ToolTip="unusedmods 目录中的 Mod 数（分析时统计；被卡片引用的可确认移回）">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource SecondaryText}">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding UnusedModCount}" Value="0">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
                         </Grid>
                         <Grid Margin="0,4">
                             <Grid.ColumnDefinitions>

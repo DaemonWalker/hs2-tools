@@ -274,7 +274,7 @@ public partial class ModsWindowViewModel : ObservableObject
                     }
                     try
                     {
-                        _scanner.MoveFile(loser.Path, UniqueTargetPath(dupDir, loser.Path));
+                        _scanner.MoveFile(loser.Path, ScannerService.UniqueTargetPath(dupDir, loser.Path));
                         moved++;
                     }
                     catch (Exception ex)
@@ -467,7 +467,7 @@ public partial class ModsWindowViewModel : ObservableObject
     {
         try
         {
-            var target = UniqueTargetPath(targetDir, mod.Path);
+            var target = ScannerService.UniqueTargetPath(targetDir, mod.Path);
             _scanner.MoveFile(mod.Path, target);
             return target;
         }
@@ -501,21 +501,4 @@ public partial class ModsWindowViewModel : ObservableObject
     /// <summary>路径是否位于指定目录内（前缀匹配，大小写不敏感）</summary>
     private static bool IsUnderDir(string path, string? dir) =>
         dir is not null && path.StartsWith(dir, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>duplicatemods 内的目标路径：同名已存在时追加 _2、_3 后缀</summary>
-    private static string UniqueTargetPath(string dir, string srcPath)
-    {
-        var name = Path.GetFileName(srcPath);
-        var target = Path.Combine(dir, name);
-        if (!File.Exists(target))
-            return target;
-        var stem = Path.GetFileNameWithoutExtension(name);
-        var ext = Path.GetExtension(name);
-        for (var i = 2; ; i++)
-        {
-            target = Path.Combine(dir, $"{stem}_{i}{ext}");
-            if (!File.Exists(target))
-                return target;
-        }
-    }
 }

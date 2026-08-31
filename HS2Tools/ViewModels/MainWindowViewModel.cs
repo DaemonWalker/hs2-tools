@@ -130,6 +130,8 @@ public partial class MainWindowViewModel : ObservableObject
         ModScanProgress = SceneScanProgress = CharaScanProgress = "";
         ScanError = "";
         LaunchStatusText = "";
+        UnusedModCount = 0;
+        _pendingMoveBack = null;
 
         var path = _config.Settings.Current.GamePath;
         GamePath = path;           // setter 有 != 守卫：与已存值相同不会回写配置
@@ -215,6 +217,15 @@ public partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty] private string _scanError = "";
 
+    /// <summary>unusedmods 中的 mod 数（数据概览"本地 Mods"后括号显示；随每次分析刷新，切游戏清零）</summary>
+    [ObservableProperty] private int _unusedModCount;
+
+    // unusedmods 待移回清单（分析完成后请求确认，确认后由 ConfirmMoveBackAsync 消费）
+    private List<(string Guid, ModInfo Info)>? _pendingMoveBack;
+
+    /// <summary>请求用户确认移回 unusedmods 中被引用的 mod（View 订阅弹确认框，确认后调 <see cref="ConfirmMoveBackAsync"/>）</summary>
+    public event EventHandler<string>? MoveBackConfirmationRequested;
+
     public string ScanButtonText => IsScanning ? "分析中..." : ScanCompleted ? "重新分析" : "开始分析";
 
     private bool CanScan() => IsGamePathValid && !IsScanning;
@@ -228,10 +239,17 @@ public partial class MainWindowViewModel : ObservableObject
         ScanStep = 0;
         ModScanDone = SceneScanDone = CharaScanDone = false;
         ModScanProgress = SceneScanProgress = CharaScanProgress = "";
+        UnusedModCount = 0;
+        _pendingMoveBack = null;
 
         try
         {
-            var mods = await ScanModsAsync(_config.GetModsDir()!);
+            // unusedmods 一并扫描（方案：分析顺带统计未使用数，被引用的分析完成后确认移回）
+            var unusedDir = _config.Settings.Current.GamePath is { } gp
+                ? Path.Combine(gp, "unusedmods")
+                : null;
+            var (mods, unusedMods) = await ScanModsAsync(_config.GetModsDir()!, unusedDir);
+            UnusedModCount = unusedMods.Count;
             ScanStep = 1;
             ModScanDone = true;
 
@@ -248,12 +266,22 @@ public partial class MainWindowViewModel : ObservableObject
             foreach (var (guid, count) in charaUsage)
                 mergedUsage[guid] = count;
 
+            // 移回候选：unusedmods 里被卡片引用、且 mods 里没有同 GUID（同 GUID 已在 mods 的属重复，留给整理去重）
+            _pendingMoveBack = unusedMods
+                .Where(kv => mergedUsage.ContainsKey(kv.Key) && !mods.ContainsKey(kv.Key))
+                .Select(kv => (kv.Key, kv.Value))
+                .ToList();
+
             _config.Update(s =>
             {
                 s.Current.LocalMods = mods;
                 s.Current.ModUsage = mergedUsage;
             });
             ScanCompleted = true;
+
+            if (_pendingMoveBack.Count > 0)
+                MoveBackConfirmationRequested?.Invoke(this,
+                    $"发现 {_pendingMoveBack.Count} 个被角色/场景卡引用的 Mod 在 unusedmods 中，移回后对应卡片将不再缺失。\n\n是否移回 mods 目录？");
         }
         catch (Exception ex)
         {
@@ -266,26 +294,88 @@ public partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>阶段 1：扫描 mods 目录全部 zipmod 并解析 manifest</summary>
-    private async Task<Dictionary<string, ModInfo>> ScanModsAsync(string modsDir)
+    /// <summary>
+    /// 阶段 1：扫描 mods 目录全部 zipmod 并解析 manifest；unusedDir（unusedmods）存在时一并扫描，
+    /// 结果单独成表（不进 LocalMods），供"未使用数"统计与分析完成后的移回候选筛选。
+    /// </summary>
+    private async Task<(Dictionary<string, ModInfo> Mods, Dictionary<string, ModInfo> UnusedMods)> ScanModsAsync(
+        string modsDir, string? unusedDir)
     {
         var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } });
-        ModScanProgress = $"0/{files.Count}";
+        var unusedFiles = unusedDir is not null && Directory.Exists(unusedDir)
+            ? _scanner.ScanDirectory(unusedDir, new ScanOptions { TargetExtension = { ".zipmod" } })
+            : new List<string>();
+        var total = files.Count + unusedFiles.Count;
+        ModScanProgress = $"0/{total}";
 
         var result = new Dictionary<string, ModInfo>();
-        for (var i = 0; i < files.Count; i += BatchSize)
+        var unusedResult = new Dictionary<string, ModInfo>();
+        var scanned = 0;
+        foreach (var (batch, isUnused) in Batches(files, false).Concat(Batches(unusedFiles, true)))
         {
-            var batch = files.GetRange(i, Math.Min(BatchSize, files.Count - i));
             var batchResult = await _scanner.ReadZipModBatchAsync(batch, onError: LogScanError);
+            var target = isUnused ? unusedResult : result;
             // 跨批合并同 guid：按去重规则裁决取最优（与 ReadZipModBatchAsync 批内口径一致）
             foreach (var (guid, info) in batchResult)
             {
-                if (!result.TryGetValue(guid, out var existing) || ScannerService.CompareModsForKeep(info, existing) < 0)
-                    result[guid] = info;
+                if (!target.TryGetValue(guid, out var existing) || ScannerService.CompareModsForKeep(info, existing) < 0)
+                    target[guid] = info;
             }
-            ModScanProgress = $"{Math.Min(i + BatchSize, files.Count)}/{files.Count}";
+            scanned += batch.Count;
+            ModScanProgress = $"{scanned}/{total}";
         }
-        return result;
+        return (result, unusedResult);
+
+        static IEnumerable<(List<string> Batch, bool IsUnused)> Batches(List<string> list, bool isUnused)
+        {
+            for (var i = 0; i < list.Count; i += BatchSize)
+                yield return (list.GetRange(i, Math.Min(BatchSize, list.Count - i)), isUnused);
+        }
+    }
+
+    /// <summary>
+    /// 移回（执行阶段）：unusedmods 中被引用的 mod 平移回 mods 根目录（同名追加 _2/_3 后缀），
+    /// 成功者补录进 LocalMods（Changed 事件驱动统计/缺失数刷新）。单文件失败记日志不中断。
+    /// </summary>
+    public async Task<(int Moved, int Failed)> ConfirmMoveBackAsync()
+    {
+        if (_pendingMoveBack is not { } pending)
+            return (0, 0);
+        _pendingMoveBack = null;
+
+        var modsDir = _config.GetModsDir();
+        if (modsDir is null)
+            return (0, pending.Count);
+
+        var movedPairs = new List<(string Guid, ModInfo Info)>();
+        var failed = 0;
+        await Task.Run(() =>
+        {
+            foreach (var (guid, info) in pending)
+            {
+                try
+                {
+                    var target = ScannerService.UniqueTargetPath(modsDir, info.Path);
+                    _scanner.MoveFile(info.Path, target);
+                    info.Path = target;
+                    movedPairs.Add((guid, info));
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    ErrorLog.Log($"unusedmods 移回失败: {info.Path}: {ex.Message}");
+                }
+            }
+        });
+
+        if (movedPairs.Count > 0)
+            _config.Update(s =>
+            {
+                foreach (var (guid, info) in movedPairs)
+                    s.Current.LocalMods[guid] = info;
+            });
+        UnusedModCount -= movedPairs.Count;
+        return (movedPairs.Count, failed);
     }
 
     /// <summary>阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数</summary>
