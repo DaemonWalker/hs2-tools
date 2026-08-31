@@ -141,6 +141,7 @@ public class ModDedupTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config); // 去重走分析缓存，先跑「开始分析」落盘
         var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
 
         string? confirmMsg = null, infoMsg = null;
@@ -152,6 +153,7 @@ public class ModDedupTests : IDisposable
         Assert.NotNull(confirmMsg);
         Assert.Contains("1 组重复", confirmMsg);
         Assert.Contains("1 个落选文件", confirmMsg);
+        Assert.Contains("分析结果", confirmMsg); // 标注缓存时点
         Assert.Null(infoMsg);
         Assert.True(File.Exists(loser)); // 确认前不动文件
 
@@ -166,6 +168,10 @@ public class ModDedupTests : IDisposable
         // LocalMods 指向各 guid 最优
         Assert.Equal(2, config.Settings.Current.LocalMods.Count);
         Assert.Equal(winner, config.Settings.Current.LocalMods["g-dup"].Path);
+
+        // 缓存同步：移走的落选者从完整条目中移除
+        Assert.Equal(2, config.Settings.Current.ModEntries.Count);
+        Assert.DoesNotContain(config.Settings.Current.ModEntries, e => e.Info.Path == loser);
 
         // Changed 事件驱动列表刷新 + 完成汇总
         Assert.Equal(2, vm.ModCount);
@@ -182,6 +188,7 @@ public class ModDedupTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config);
         var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
 
         string? confirmMsg = null, infoMsg = null;
@@ -209,6 +216,7 @@ public class ModDedupTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config);
         var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
         vm.DedupConfirmationRequested += (_, _) => { };
 
@@ -232,6 +240,56 @@ public class ModDedupTests : IDisposable
         await vm.DedupCommand.ExecuteAsync(null);
 
         Assert.Equal("请先设置游戏目录", infoMsg);
+    }
+
+    [Fact]
+    public async Task Dedup_NoAnalysis_ShowsHint()
+    {
+        var gameDir = MakeGameDir(); // 已设游戏目录但从未「开始分析」
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
+        TestAssets.WriteZipmod(modsDir, "a.zipmod", TestAssets.MakeManifest("g-a", "A"));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
+
+        string? confirmMsg = null, infoMsg = null;
+        vm.DedupConfirmationRequested += (_, msg) => confirmMsg = msg;
+        vm.DedupMessageRequested += (_, msg) => infoMsg = msg;
+
+        await vm.DedupCommand.ExecuteAsync(null);
+
+        Assert.Null(confirmMsg);
+        Assert.Equal("请先在首页运行「开始分析」", infoMsg);
+    }
+
+    [Fact]
+    public async Task Dedup_FileMissingAtExecution_Skipped()
+    {
+        var gameDir = MakeGameDir();
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
+        TestAssets.WriteZipmod(modsDir, "keep.zipmod", TestAssets.MakeManifest("g-dup", "Keep", "2.0"));
+        var loser = TestAssets.WriteZipmod(modsDir, "drop.zipmod", TestAssets.MakeManifest("g-dup", "Drop", "1.0"));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config);
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
+
+        string? confirmMsg = null, infoMsg = null;
+        vm.DedupConfirmationRequested += (_, msg) => confirmMsg = msg;
+        vm.DedupMessageRequested += (_, msg) => infoMsg = msg;
+
+        await vm.DedupCommand.ExecuteAsync(null);
+        Assert.NotNull(confirmMsg); // 缓存里仍有重复 → 照常出计划
+
+        File.Delete(loser); // 分析后文件被手动删了：执行时按存在性校验跳过
+        await vm.ConfirmDedupAsync();
+
+        Assert.False(Directory.Exists(Path.Combine(gameDir, "duplicatemods"))); // 没有实际移动
+        Assert.NotNull(infoMsg);
+        Assert.Contains("已移动 0 个文件", infoMsg);
+        Assert.Contains("跳过 1 个", infoMsg);
     }
 
     [Fact]

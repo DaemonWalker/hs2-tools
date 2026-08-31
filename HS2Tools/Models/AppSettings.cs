@@ -41,6 +41,21 @@ public class GameData
 
     /// <summary>Mod 使用次数（guid -> count）</summary>
     public Dictionary<string, int> ModUsage { get; set; } = new();
+
+    /// <summary>「开始分析」的完整 zipmod 条目（含重复 guid，覆盖 mods/unusedmods；去重/整理的数据源，不再重扫磁盘）</summary>
+    public List<ModScanEntry> ModEntries { get; set; } = new();
+
+    /// <summary>人物卡引用统计（guid -> count；ModUsage 是两卡合并口径，整理需分卡区分"仅场景引用"故单独持久化）</summary>
+    public Dictionary<string, int> CharaUsage { get; set; } = new();
+
+    /// <summary>场景卡引用统计（guid -> count）</summary>
+    public Dictionary<string, int> SceneUsage { get; set; } = new();
+
+    /// <summary>分析时卡片 KKEx 命中的 shader 名（整理时 shader 包豁免依据）</summary>
+    public List<string> UsedShaderNames { get; set; } = new();
+
+    /// <summary>最近一次「开始分析」完成时间（去重/整理确认文案标注缓存时点；null = 从未分析）</summary>
+    public DateTime? LastAnalysisTime { get; set; }
 }
 
 /// <summary>代理信息（对应 Go app.ProxyInfo）</summary>

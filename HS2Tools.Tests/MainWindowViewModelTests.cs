@@ -376,6 +376,43 @@ public class MainWindowViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Scan_PersistsOrganizeCache()
+    {
+        // 去重/整理的数据源缓存：完整条目（含重复 guid、覆盖 unusedmods）、分卡引用、shader 命中、时点
+        var gameDir = MakeGameDir();
+        var modsDir = Path.Combine(gameDir, "mods");
+        var unusedDir = Path.Combine(gameDir, "unusedmods");
+        Directory.CreateDirectory(unusedDir);
+        var shaderManifest = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest>\n" +
+                             "<guid>g-shader</guid>\n<name>Shader Pack</name>\n<version>1.0</version>\n" +
+                             "<MaterialEditor>\n<Shader Name=\"xukmi/SkinPlus\" />\n<Shader Name=\"xukmi/FX\" />\n" +
+                             "</MaterialEditor>\n</manifest>";
+        TestAssets.WriteZipmod(modsDir, "a_v1.zipmod", TestAssets.MakeManifest("g-a", "A", "1.0"));
+        TestAssets.WriteZipmod(modsDir, "a_v2.zipmod", TestAssets.MakeManifest("g-a", "A", "2.0")); // 重复 guid
+        TestAssets.WriteZipmod(modsDir, "shader.zipmod", shaderManifest);
+        TestAssets.WriteZipmod(unusedDir, "u.zipmod", TestAssets.MakeManifest("g-u", "U"));
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative), "s1.png",
+            TestAssets.PngPrefix(), TestAssets.ModMarker("g-a"));
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegionWithShaders("白峰", "一乃", ["g-u"], ["xukmi/SkinPlus"]));
+
+        using var config = new ConfigService(_dir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.GamePath = gameDir;
+        await vm.ScanCommand.ExecuteAsync(null);
+
+        var data = config.Settings.Current;
+        Assert.Equal(4, data.ModEntries.Count); // 完整条目不折叠重复：a_v1/a_v2/shader + unusedmods 的 u
+        Assert.Equal(2, data.ModEntries.Count(e => e.Guid == "g-a"));
+        Assert.Contains(data.ModEntries, e => e.Guid == "g-u");
+        Assert.Equal(1, data.SceneUsage["g-a"]);
+        Assert.False(data.CharaUsage.ContainsKey("g-a")); // 分卡口径：g-a 仅场景引用
+        Assert.Equal(1, data.CharaUsage["g-u"]);
+        Assert.Equal(["xukmi/SkinPlus"], data.UsedShaderNames); // 只收录卡片命中的 shader 名
+        Assert.NotNull(data.LastAnalysisTime);
+    }
+
+    [Fact]
     public async Task Scan_MergeSemantics_CharaOverwritesScene()
     {
         // 原版 { ...scene, ...female }：同 guid 时角色统计覆盖场景统计

@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HS2Tools.Models;
@@ -23,6 +22,7 @@ public partial class ModItemViewModel : ObservableObject
 /// 本地模组窗口 ViewModel（对应原版 Mods/LocalMods.tsx）：
 /// 统计三卡（本地 Mods 总数 / 被引用 Mods 数 / 总引用次数，与首页数据概览同口径）、
 /// 所有/未使用筛选、刷新重扫 mods 目录 zipmod。
+/// 去重/整理不重扫磁盘，以首页「开始分析」持久化的缓存（ModEntries/CharaUsage/SceneUsage/UsedShaderNames）为数据源。
 /// </summary>
 public partial class ModsWindowViewModel : ObservableObject
 {
@@ -102,6 +102,9 @@ public partial class ModsWindowViewModel : ObservableObject
 
     // 整理待执行计划（确认后由 ConfirmOrganizeAsync 消费；目标目录已在计划内）
     private ModOrganizePlan? _pendingPlan;
+
+    // 整理分析阶段的完整条目（ConfirmOrganizeAsync 重建缓存时据此找回移动失败落选者的 guid）
+    private List<KeyValuePair<string, ModInfo>>? _pendingEntries;
 
     public bool IsEmpty => Mods.Count == 0;
 
@@ -192,11 +195,12 @@ public partial class ModsWindowViewModel : ObservableObject
     private static void LogScanError(string message) => App.LogException(new Exception(message));
 
     /// <summary>
-    /// 去重（分析阶段）：重扫 mods 目录，同 guid 按规则（版本高 → 体积大 → 日期新）裁决，
-    /// 发现重复则暂存计划并请求确认；确认后由 <see cref="ConfirmDedupAsync"/> 执行移动。
+    /// 去重（分析阶段）：以首页「开始分析」持久化的完整条目缓存为数据源（不重扫磁盘），
+    /// 同 guid 按规则（版本高 → 体积大 → 日期新）裁决，发现重复则暂存计划并请求确认；
+    /// 确认后由 <see cref="ConfirmDedupAsync"/> 执行移动。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanDedup))]
-    private async Task DedupAsync()
+    private Task DedupAsync()
     {
         IsDeduping = true;
         try
@@ -206,11 +210,20 @@ public partial class ModsWindowViewModel : ObservableObject
             if (modsDir is null || string.IsNullOrEmpty(gamePath))
             {
                 DedupMessageRequested?.Invoke(this, "请先设置游戏目录");
-                return;
+                return Task.CompletedTask;
+            }
+            var settings = _config.Settings.Current;
+            if (settings.LastAnalysisTime is not { } scanTime)
+            {
+                DedupMessageRequested?.Invoke(this, "请先在首页运行「开始分析」");
+                return Task.CompletedTask;
             }
 
-            var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } });
-            var entries = await _scanner.ReadZipModBatchListAsync(files, onError: LogScanError);
+            // 缓存条目覆盖 mods/unusedmods 两目录；去重只针对 mods 目录（与原重扫口径一致）
+            var entries = settings.ModEntries
+                .Where(e => IsUnderDir(e.Info.Path, modsDir))
+                .Select(e => KeyValuePair.Create(e.Guid, e.Info))
+                .ToList();
 
             var winners = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
             var losers = new List<ModInfo>();
@@ -231,7 +244,7 @@ public partial class ModsWindowViewModel : ObservableObject
             if (losers.Count == 0)
             {
                 DedupMessageRequested?.Invoke(this, "没有发现重复的 Mods");
-                return;
+                return Task.CompletedTask;
             }
 
             _pendingWinners = winners;
@@ -239,12 +252,13 @@ public partial class ModsWindowViewModel : ObservableObject
             _pendingDupDir = Path.Combine(gamePath, "duplicatemods");
             DedupConfirmationRequested?.Invoke(this,
                 $"发现 {groups} 组重复 Mods，将把 {losers.Count} 个落选文件移动到游戏目录下的 duplicatemods 文件夹" +
-                "（保留规则：版本高 → 体积大 → 日期新）。是否继续？");
+                $"（保留规则：版本高 → 体积大 → 日期新；基于 {scanTime:yyyy-MM-dd HH:mm} 的分析结果，如手动增删过 Mod 请先重新分析）。是否继续？");
         }
         finally
         {
             IsDeduping = false;
         }
+        return Task.CompletedTask;
     }
 
     /// <summary>去重（执行阶段）：落选文件移入 duplicatemods，LocalMods 更新为各 guid 最优</summary>
@@ -259,6 +273,7 @@ public partial class ModsWindowViewModel : ObservableObject
         IsDeduping = true;
         var downloadDir = _config.GetModDownloadDir();
         var (moved, failed, skipped) = (0, 0, 0);
+        var movedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             await Task.Run(() =>
@@ -273,9 +288,17 @@ public partial class ModsWindowViewModel : ObservableObject
                         App.LogException(new Exception($"Dedup skip (in download dir): {loser.Path}"));
                         continue;
                     }
+                    // 缓存时点之后文件可能已被手动移走/删除：存在性校验，消失则跳过
+                    if (!File.Exists(loser.Path))
+                    {
+                        skipped++;
+                        App.LogException(new Exception($"Dedup skip (file missing): {loser.Path}"));
+                        continue;
+                    }
                     try
                     {
                         _scanner.MoveFile(loser.Path, ScannerService.UniqueTargetPath(dupDir, loser.Path));
+                        movedPaths.Add(loser.Path);
                         moved++;
                     }
                     catch (Exception ex)
@@ -286,11 +309,17 @@ public partial class ModsWindowViewModel : ObservableObject
                 }
             });
 
-            _config.Update(s => s.Current.LocalMods = winners);
+            _config.Update(s =>
+            {
+                s.Current.LocalMods = winners;
+                // 缓存同步：移走的落选者从完整条目中移除（留下的条目 Path 未变）
+                if (movedPaths.Count > 0)
+                    s.Current.ModEntries.RemoveAll(e => movedPaths.Contains(e.Info.Path));
+            });
 
             var summary = $"去重完成：已移动 {moved} 个文件到 duplicatemods";
             if (skipped > 0)
-                summary += $"，跳过下载目录 {skipped} 个";
+                summary += $"，跳过 {skipped} 个（下载目录内或文件已不存在）";
             if (failed > 0)
                 summary += $"（{failed} 个失败）";
             DedupMessageRequested?.Invoke(this, summary);
@@ -302,13 +331,14 @@ public partial class ModsWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 整理（分析阶段）：重扫 mods 目录（排除下载目录与 mods/scenemods）外加 unusedmods，
-    /// 实时分别扫描人物卡/场景卡 PNG 引用（现有 ModUsage 缓存是两卡合并口径，区分不了"仅场景"），
+    /// 整理（分析阶段）：以首页「开始分析」持久化的缓存为数据源（不重扫磁盘）——
+    /// 完整 zipmod 条目（覆盖 mods/unusedmods，排除下载目录与 mods/scenemods）、
+    /// 分卡（人物/场景）引用集、卡片命中的 shader 名（映射回提供它的 mod GUID 做豁免）；
     /// 先按去重规则裁决同 GUID 重复，再按引用与站点索引分类（有扫描记录才按站点目录归位）；
     /// 有活可干则暂存计划并请求确认。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanOrganize))]
-    private async Task OrganizeAsync()
+    private Task OrganizeAsync()
     {
         IsOrganizing = true;
         try
@@ -318,23 +348,28 @@ public partial class ModsWindowViewModel : ObservableObject
             if (modsDir is null || string.IsNullOrEmpty(gamePath))
             {
                 OrganizeMessageRequested?.Invoke(this, "请先设置游戏目录");
-                return;
+                return Task.CompletedTask;
+            }
+            var settings = _config.Settings.Current;
+            if (settings.LastAnalysisTime is not { } scanTime)
+            {
+                OrganizeMessageRequested?.Invoke(this, "请先在首页运行「开始分析」");
+                return Task.CompletedTask;
             }
 
-            // 下载目录与 mods/scenemods（整理目标目录）内的文件不参与整理
+            // 下载目录与 mods/scenemods（整理目标目录）内的文件不参与整理（缓存条目按路径过滤）
             var downloadDir = _config.GetModDownloadDir();
             var sceneModsDir = Path.Combine(modsDir, "scenemods");
-            var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } })
-                .Where(f => !IsUnderDir(f, downloadDir) && !IsUnderDir(f, sceneModsDir))
+            var entries = settings.ModEntries
+                .Where(e => !IsUnderDir(e.Info.Path, downloadDir) && !IsUnderDir(e.Info.Path, sceneModsDir))
+                .Select(e => KeyValuePair.Create(e.Guid, e.Info))
                 .ToList();
-            // unusedmods 一并扫描：被引用的移回 mods，未引用的原地不动
-            var unusedDir = Path.Combine(gamePath, "unusedmods");
-            if (Directory.Exists(unusedDir))
-                files.AddRange(_scanner.ScanDirectory(unusedDir, new ScanOptions { TargetExtension = { ".zipmod" } }));
-            var entries = await _scanner.ReadZipModBatchListAsync(files, onError: LogScanError);
 
-            // shader 使用检测：卡片不按 GUID 引用 shader 包，但会把 shader 名明文留在 KKEx
-            // （Material Editor 数据）里；以 manifest 声明的 shader 名为候选做内容级匹配
+            // 分卡引用集（缓存为 guid->count 字典，整理只需归属集合）
+            var charaUsage = new HashSet<string>(settings.CharaUsage.Keys, StringComparer.OrdinalIgnoreCase);
+            var sceneUsage = new HashSet<string>(settings.SceneUsage.Keys, StringComparer.OrdinalIgnoreCase);
+
+            // shader 豁免：分析时卡片 KKEx 命中的 shader 名 → 提供它的 mod GUID（按人物卡引用同口径豁免）
             var shaderNameToGuids = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
             foreach (var (guid, info) in entries)
             {
@@ -345,18 +380,11 @@ public partial class ModsWindowViewModel : ObservableObject
                     guids.Add(guid);
                 }
             }
-            var shaderNames = shaderNameToGuids.Keys
-                .Select(n => new KeyValuePair<string, byte[]>(n, Encoding.UTF8.GetBytes(n)))
-                .ToList();
-            var usedShaderNames = new HashSet<string>(StringComparer.Ordinal);
-
-            var charaUsage = await ScanPngUsageSetAsync(_config.GetCharaDir(), shaderNames, usedShaderNames);
-            var sceneUsage = await ScanPngUsageSetAsync(_config.GetSceneDir(), shaderNames, usedShaderNames);
-            // 命中 shader 名 → 提供它的 mod GUID（整理时按人物卡引用同口径豁免）
             var shaderUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var name in usedShaderNames)
-                foreach (var guid in shaderNameToGuids[name])
-                    shaderUsage.Add(guid);
+            foreach (var name in settings.UsedShaderNames)
+                if (shaderNameToGuids.TryGetValue(name, out var guids))
+                    foreach (var guid in guids)
+                        shaderUsage.Add(guid);
 
             // 有扫描记录（meta 存在）才按站点目录归位，否则站点索引不参与分类
             var siteIndex = _sideloadDb.GetMeta() is not null ? _sideloadDb.Database : null;
@@ -365,10 +393,11 @@ public partial class ModsWindowViewModel : ObservableObject
                 plan.SceneOnly.Count == 0 && plan.SitePlaced.Count == 0)
             {
                 OrganizeMessageRequested?.Invoke(this, "Mods 无需整理");
-                return;
+                return Task.CompletedTask;
             }
 
             _pendingPlan = plan;
+            _pendingEntries = entries;
             var segments = new List<string>();
             if (plan.Duplicates.Count > 0)
                 segments.Add($"{plan.Duplicates.Count} 个重复落选文件（{plan.DupGroups} 组，保留规则：版本高 → 体积大 → 日期新）移动到 duplicatemods");
@@ -379,23 +408,28 @@ public partial class ModsWindowViewModel : ObservableObject
             if (plan.SitePlaced.Count > 0)
                 segments.Add($"{plan.SitePlaced.Count} 个 Mods 按站点目录归位/移回 mods");
             OrganizeConfirmationRequested?.Invoke(this,
-                $"整理 Mods 将把：{string.Join("，", segments)}。是否继续？");
+                $"整理 Mods 将把：{string.Join("，", segments)}" +
+                $"（基于 {scanTime:yyyy-MM-dd HH:mm} 的分析结果，如手动增删过 Mod 请先重新分析）。是否继续？");
         }
         finally
         {
             IsOrganizing = false;
         }
+        return Task.CompletedTask;
     }
 
-    /// <summary>整理（执行阶段）：各类文件分别移入计划目标目录，LocalMods 同步写回</summary>
+    /// <summary>整理（执行阶段）：各类文件分别移入计划目标目录，LocalMods 与完整条目缓存同步写回</summary>
     public async Task ConfirmOrganizeAsync()
     {
         if (_pendingPlan is not { } plan)
             return;
         _pendingPlan = null;
+        var oldEntries = _pendingEntries;
+        _pendingEntries = null;
 
         IsOrganizing = true;
         var (dupMoved, unusedMoved, sceneMoved, siteMoved, failed) = (0, 0, 0, 0, 0);
+        var failedMods = new List<ModInfo>();
         try
         {
             await Task.Run(() =>
@@ -411,6 +445,7 @@ public partial class ModsWindowViewModel : ObservableObject
                     else
                     {
                         failed++;
+                        failedMods.Add(move.Mod);
                     }
                 }
                 foreach (var move in plan.Unused)
@@ -423,6 +458,7 @@ public partial class ModsWindowViewModel : ObservableObject
                     else
                     {
                         failed++;
+                        failedMods.Add(move.Mod);
                     }
                 }
                 foreach (var move in plan.SceneOnly)
@@ -435,6 +471,7 @@ public partial class ModsWindowViewModel : ObservableObject
                     else
                     {
                         failed++;
+                        failedMods.Add(move.Mod);
                     }
                 }
                 foreach (var move in plan.SitePlaced)
@@ -447,6 +484,7 @@ public partial class ModsWindowViewModel : ObservableObject
                     else
                     {
                         failed++;
+                        failedMods.Add(move.Mod);
                     }
                 }
             });
@@ -463,6 +501,19 @@ public partial class ModsWindowViewModel : ObservableObject
                         mods[guid] = info;
                 }
                 s.Current.LocalMods = mods;
+
+                // 缓存同步：以赢家最终落点重建完整条目；移动失败的落选者仍在磁盘上，保留条目供下次去重/整理
+                var rebuilt = new List<ModScanEntry>();
+                foreach (var (guid, info) in plan.Winners)
+                    rebuilt.Add(new ModScanEntry { Guid = guid, Info = info });
+                if (failedMods.Count > 0 && oldEntries is not null)
+                {
+                    var failedSet = new HashSet<ModInfo>(failedMods);
+                    foreach (var (guid, info) in oldEntries)
+                        if (failedSet.Contains(info))
+                            rebuilt.Add(new ModScanEntry { Guid = guid, Info = info });
+                }
+                s.Current.ModEntries = rebuilt;
             });
 
             var parts = new List<string>();
@@ -485,9 +536,15 @@ public partial class ModsWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>逐文件移动（防重名），失败记日志返回 null 不中断</summary>
+    /// <summary>逐文件移动（防重名）；缓存时点后文件消失或移动失败记日志返回 null 不中断</summary>
     private string? TryOrganizeMove(ModInfo mod, string targetDir)
     {
+        // 存在性校验：分析缓存时点之后文件可能已被手动移走/删除
+        if (!File.Exists(mod.Path))
+        {
+            App.LogException(new Exception($"Organize move skipped (file missing): {mod.Path}"));
+            return null;
+        }
         try
         {
             var target = ScannerService.UniqueTargetPath(targetDir, mod.Path);
@@ -499,44 +556,6 @@ public partial class ModsWindowViewModel : ObservableObject
             App.LogException(new Exception($"Organize move failed: {mod.Path}: {ex.Message}"));
             return null;
         }
-    }
-
-    /// <summary>
-    /// 扫描 PNG 目录汇成引用 GUID 集合（分批同 MainWindowViewModel，目录不存在视为空）。
-    /// shaderNames 非空时同步做 shader 使用检测，命中的 shader 名累积进 usedShaderNames。
-    /// </summary>
-    private async Task<HashSet<string>> ScanPngUsageSetAsync(
-        string? dir, IReadOnlyList<KeyValuePair<string, byte[]>>? shaderNames = null,
-        HashSet<string>? usedShaderNames = null)
-    {
-        var usage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (dir is null || !Directory.Exists(dir))
-            return usage;
-
-        const int batchSize = 500;
-        var files = _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".png" } });
-        for (var i = 0; i < files.Count; i += batchSize)
-        {
-            var batch = files.GetRange(i, Math.Min(batchSize, files.Count - i));
-            if (shaderNames is { Count: > 0 })
-            {
-                var results = await _scanner.ReadPngModsAndShadersBatchAsync(batch, shaderNames, onError: LogScanError);
-                foreach (var item in results)
-                {
-                    foreach (var modId in item.ModIDs)
-                        usage.Add(modId);
-                    if (usedShaderNames is not null)
-                        foreach (var name in item.ShaderNames)
-                            usedShaderNames.Add(name);
-                }
-                continue;
-            }
-            var modsOnly = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
-            foreach (var item in modsOnly)
-                foreach (var modId in item.ModIDs)
-                    usage.Add(modId);
-        }
-        return usage;
     }
 
     /// <summary>路径是否位于指定目录内（前缀匹配，大小写不敏感）</summary>

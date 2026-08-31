@@ -4,7 +4,9 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using HS2Tools.Models;
 using HS2Tools.Services;
+using HS2Tools.ViewModels;
 using MessagePack;
 
 namespace HS2Tools.Tests;
@@ -17,6 +19,27 @@ internal static class TestAssets
         // 全部测试的 ErrorLog 统一改写到测试目录，避免污染真实 %AppData%/hs2-tools/error.log
         // （具体用例可再临时覆盖 DirectoryOverride，恢复时须还原到本值）
         ErrorLog.DirectoryOverride = NewTempDir();
+    }
+
+    /// <summary>
+    /// 跑一遍真正的「开始分析」（MainWindowViewModel.ScanAsync），把去重/整理所需的
+    /// 完整缓存（ModEntries/CharaUsage/SceneUsage/UsedShaderNames/LastAnalysisTime）落进 GameData。
+    /// Mods 窗口去重/整理测试的前置（这两个功能已改为消费分析缓存，不再自行重扫）。
+    /// </summary>
+    public static async Task RunAnalysisAsync(ConfigService config, SideloadDatabaseService? db = null)
+    {
+        var vm = new MainWindowViewModel(config, new ScannerService(), new DownloadManager(),
+            new GameLauncherService(config), db ?? new SideloadDatabaseService(config), () => new NoopSideloader());
+        await vm.ScanCommand.ExecuteAsync(null);
+    }
+
+    private sealed class NoopSideloader : ISideloaderService
+    {
+        public bool IsRunning => false;
+        public Task<Dictionary<string, string>> RunAsync(
+            Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null) =>
+            Task.FromResult(new Dictionary<string, string>());
+        public void Cancel() { }
     }
 
     public static string NewTempDir()

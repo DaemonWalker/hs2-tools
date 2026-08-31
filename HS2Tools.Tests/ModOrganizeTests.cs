@@ -308,6 +308,7 @@ public class ModOrganizeTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config); // 整理走分析缓存，先跑「开始分析」落盘
         var vm = MakeVm(config); // 无 meta：站点索引不参与，行为同整理初版
 
         string? confirmMsg = null;
@@ -368,6 +369,7 @@ public class ModOrganizeTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config);
         var vm = MakeVm(config); // 无 meta：移回 mods 根目录
 
         string? confirmMsg = null;
@@ -425,6 +427,7 @@ public class ModOrganizeTests : IDisposable
             Status = SideloadScanStatus.Success,
             FoundCount = 3,
         });
+        await TestAssets.RunAnalysisAsync(config, db);
         var vm = MakeVm(config, db);
 
         string? confirmMsg = null;
@@ -471,6 +474,7 @@ public class ModOrganizeTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config);
         var vm = MakeVm(config);
 
         string? confirmMsg = null;
@@ -501,6 +505,7 @@ public class ModOrganizeTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
+        await TestAssets.RunAnalysisAsync(config);
         var vm = MakeVm(config);
 
         string? confirmMsg = null;
@@ -535,6 +540,27 @@ public class ModOrganizeTests : IDisposable
 
         Assert.Null(confirmMsg);
         Assert.Equal("请先设置游戏目录", message);
+    }
+
+    [Fact]
+    public async Task Organize_NoAnalysis_ShowsHint()
+    {
+        var gameDir = MakeGameDir(); // 已设游戏目录但从未「开始分析」
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
+        TestAssets.WriteZipmod(modsDir, "a.zipmod", TestAssets.MakeManifest("g-a", "Mod A"));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = MakeVm(config);
+
+        string? confirmMsg = null, message = null;
+        vm.OrganizeConfirmationRequested += (_, msg) => confirmMsg = msg;
+        vm.OrganizeMessageRequested += (_, msg) => message = msg;
+
+        await vm.OrganizeCommand.ExecuteAsync(null);
+
+        Assert.Null(confirmMsg);
+        Assert.Equal("请先在首页运行「开始分析」", message);
     }
 
     [Fact]

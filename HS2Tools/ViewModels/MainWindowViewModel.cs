@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HS2Tools.Models;
@@ -248,16 +249,26 @@ public partial class MainWindowViewModel : ObservableObject
             var unusedDir = _config.Settings.Current.GamePath is { } gp
                 ? Path.Combine(gp, "unusedmods")
                 : null;
-            var (mods, unusedMods) = await ScanModsAsync(_config.GetModsDir()!, unusedDir);
+            var (mods, unusedMods, entries) = await ScanModsAsync(_config.GetModsDir()!, unusedDir);
             UnusedModCount = unusedMods.Count;
             ScanStep = 1;
             ModScanDone = true;
 
-            var sceneUsage = await ScanPngUsageAsync(_config.GetSceneDir()!, p => SceneScanProgress = p);
+            // shader 使用检测：卡片不按 GUID 引用 shader 包，但会把 shader 名明文留在 KKEx
+            // （Material Editor 数据）里；以全部条目 manifest 声明的 shader 名为候选做内容级匹配
+            // （与读卡同一趟磁盘读取，只多内存匹配），命中名单随分析结果持久化供整理豁免用
+            var shaderNames = entries
+                .SelectMany(e => e.Info.ShaderNames)
+                .Distinct(StringComparer.Ordinal)
+                .Select(n => new KeyValuePair<string, byte[]>(n, Encoding.UTF8.GetBytes(n)))
+                .ToList();
+            var usedShaderNames = new HashSet<string>(StringComparer.Ordinal);
+
+            var sceneUsage = await ScanPngUsageAsync(_config.GetSceneDir()!, p => SceneScanProgress = p, shaderNames, usedShaderNames);
             ScanStep = 2;
             SceneScanDone = true;
 
-            var charaUsage = await ScanPngUsageAsync(_config.GetCharaDir()!, p => CharaScanProgress = p);
+            var charaUsage = await ScanPngUsageAsync(_config.GetCharaDir()!, p => CharaScanProgress = p, shaderNames, usedShaderNames);
             ScanStep = 3;
             CharaScanDone = true;
 
@@ -276,6 +287,12 @@ public partial class MainWindowViewModel : ObservableObject
             {
                 s.Current.LocalMods = mods;
                 s.Current.ModUsage = mergedUsage;
+                // 去重/整理的数据源缓存：完整条目（含重复）+ 分卡引用 + shader 命中 + 时点
+                s.Current.ModEntries = entries;
+                s.Current.CharaUsage = charaUsage;
+                s.Current.SceneUsage = sceneUsage;
+                s.Current.UsedShaderNames = usedShaderNames.ToList();
+                s.Current.LastAnalysisTime = DateTime.Now;
             });
             ScanCompleted = true;
 
@@ -295,10 +312,11 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 阶段 1：扫描 mods 目录全部 zipmod 并解析 manifest；unusedDir（unusedmods）存在时一并扫描，
-    /// 结果单独成表（不进 LocalMods），供"未使用数"统计与分析完成后的移回候选筛选。
+    /// 阶段 1：扫描 mods 目录全部 zipmod 并解析 manifest；unusedDir（unusedmods）存在时一并扫描。
+    /// 折叠后的 mods/unusedMods 供统计与移回候选（unusedMods 不进 LocalMods）；
+    /// 完整条目列表（含重复 guid，与两字典共享 ModInfo 引用）持久化为去重/整理的缓存数据源。
     /// </summary>
-    private async Task<(Dictionary<string, ModInfo> Mods, Dictionary<string, ModInfo> UnusedMods)> ScanModsAsync(
+    private async Task<(Dictionary<string, ModInfo> Mods, Dictionary<string, ModInfo> UnusedMods, List<ModScanEntry> Entries)> ScanModsAsync(
         string modsDir, string? unusedDir)
     {
         var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } });
@@ -308,23 +326,26 @@ public partial class MainWindowViewModel : ObservableObject
         var total = files.Count + unusedFiles.Count;
         ModScanProgress = $"0/{total}";
 
-        var result = new Dictionary<string, ModInfo>();
-        var unusedResult = new Dictionary<string, ModInfo>();
+        var result = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
+        var unusedResult = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
+        var entries = new List<ModScanEntry>();
         var scanned = 0;
         foreach (var (batch, isUnused) in Batches(files, false).Concat(Batches(unusedFiles, true)))
         {
-            var batchResult = await _scanner.ReadZipModBatchAsync(batch, onError: LogScanError);
+            var batchEntries = await _scanner.ReadZipModBatchListAsync(batch, onError: LogScanError);
             var target = isUnused ? unusedResult : result;
-            // 跨批合并同 guid：按去重规则裁决取最优（与 ReadZipModBatchAsync 批内口径一致）
-            foreach (var (guid, info) in batchResult)
+            // 跨批合并同 guid：按去重规则裁决取最优（与 ReadZipModBatchAsync 批内口径一致）；
+            // 完整列表逐条留存（重复 guid 不折叠），供去重/整理复用
+            foreach (var (guid, info) in batchEntries)
             {
+                entries.Add(new ModScanEntry { Guid = guid, Info = info });
                 if (!target.TryGetValue(guid, out var existing) || ScannerService.CompareModsForKeep(info, existing) < 0)
                     target[guid] = info;
             }
             scanned += batch.Count;
             ModScanProgress = $"{scanned}/{total}";
         }
-        return (result, unusedResult);
+        return (result, unusedResult, entries);
 
         static IEnumerable<(List<string> Batch, bool IsUnused)> Batches(List<string> list, bool isUnused)
         {
@@ -378,8 +399,14 @@ public partial class MainWindowViewModel : ObservableObject
         return (movedPairs.Count, failed);
     }
 
-    /// <summary>阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数</summary>
-    private async Task<Dictionary<string, int>> ScanPngUsageAsync(string dir, Action<string> report)
+    /// <summary>
+    /// 阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数。
+    /// shaderNames 非空时同一趟读取顺带做 shader 使用检测（命中名累积进 usedShaderNames，供整理豁免）。
+    /// </summary>
+    private async Task<Dictionary<string, int>> ScanPngUsageAsync(
+        string dir, Action<string> report,
+        IReadOnlyList<KeyValuePair<string, byte[]>>? shaderNames = null,
+        HashSet<string>? usedShaderNames = null)
     {
         var files = _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".png" } });
         report($"0/{files.Count}");
@@ -388,11 +415,26 @@ public partial class MainWindowViewModel : ObservableObject
         for (var i = 0; i < files.Count; i += BatchSize)
         {
             var batch = files.GetRange(i, Math.Min(BatchSize, files.Count - i));
-            var batchResults = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
-            foreach (var item in batchResults)
+            if (shaderNames is { Count: > 0 })
             {
-                foreach (var modId in item.ModIDs)
-                    usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
+                var batchResults = await _scanner.ReadPngModsAndShadersBatchAsync(batch, shaderNames, onError: LogScanError);
+                foreach (var item in batchResults)
+                {
+                    foreach (var modId in item.ModIDs)
+                        usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
+                    if (usedShaderNames is not null)
+                        foreach (var name in item.ShaderNames)
+                            usedShaderNames.Add(name);
+                }
+            }
+            else
+            {
+                var batchResults = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
+                foreach (var item in batchResults)
+                {
+                    foreach (var modId in item.ModIDs)
+                        usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
+                }
             }
             report($"{Math.Min(i + BatchSize, files.Count)}/{files.Count}");
         }
