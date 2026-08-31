@@ -47,6 +47,7 @@ dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
 
 ## 关键约定
 
+- **决策一律请示用户**：修改或新增功能时，只要出现两种及以上可行方案/取舍（实现方式、行为口径、兼容范围等），必须直接询问用户选择，不得自行替用户做决定。
 - **状态下沉服务层单例**，Window 只是视图；跨窗体通信走服务事件；VM/窗口与服务同寿，永久订阅。
 - **游戏特定知识集中在 GameProfiles**（exe 名、目录相对路径、卡片标记字节、Parameter 名字段键、sideload 数据源与 base URL）；服务层一律经 `ConfigService.CurrentProfile` 按当前游戏求值，不得另写游戏常量。卡片解析按卡头标记自动识别格式（HS2【AIS_Chara】与 KK/KKS【KoiKatuChara】都认，不依赖当前游戏）。KK/KKS 的 exe 名按常见安装版填写，待真实环境验证。
 - **行为保真**：扫描/下载/爬虫逻辑按既定行为 1:1 复刻（字节级 hack 全部保留，注释注明出处）；网络/编码边界行为有既定口径，改动前先读相关注释与测试。
