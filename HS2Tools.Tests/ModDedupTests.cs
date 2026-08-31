@@ -141,7 +141,7 @@ public class ModDedupTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
 
         string? confirmMsg = null, infoMsg = null;
         vm.DedupConfirmationRequested += (_, msg) => confirmMsg = msg;
@@ -182,7 +182,7 @@ public class ModDedupTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
 
         string? confirmMsg = null, infoMsg = null;
         vm.DedupConfirmationRequested += (_, msg) => confirmMsg = msg;
@@ -209,7 +209,7 @@ public class ModDedupTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
         vm.DedupConfirmationRequested += (_, _) => { };
 
         await vm.DedupCommand.ExecuteAsync(null);
@@ -224,7 +224,7 @@ public class ModDedupTests : IDisposable
     public async Task Dedup_NoGamePath_ShowsHint()
     {
         using var config = new ConfigService(_dir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
 
         string? infoMsg = null;
         vm.DedupMessageRequested += (_, msg) => infoMsg = msg;
@@ -238,7 +238,7 @@ public class ModDedupTests : IDisposable
     public void Dedup_WhileBusy_CannotReenter()
     {
         using var config = new ConfigService(_dir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
 
         vm.IsDeduping = true;
         Assert.False(vm.DedupCommand.CanExecute(null));

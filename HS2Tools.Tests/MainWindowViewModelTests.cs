@@ -32,6 +32,7 @@ public class MainWindowViewModelTests : IDisposable
         public bool IsRunning { get; private set; }
         public bool Cancelled { get; private set; }
         public Dictionary<string, string> Result { get; set; } = new();
+        public Exception? Throw { get; set; } // 非 null 时 Gate 放行后抛出（异常分支测试）
         public readonly TaskCompletionSource Started = new();
         public readonly TaskCompletionSource Gate = new();
 
@@ -43,6 +44,8 @@ public class MainWindowViewModelTests : IDisposable
             try
             {
                 await Gate.Task;
+                if (Throw is not null)
+                    throw Throw;
                 onLog?.Invoke("Processing: http://example.test/dir/");
                 onProgress?.Report(new SideloaderProgress(Result.Count, 0));
                 return Result;
@@ -439,6 +442,65 @@ public class MainWindowViewModelTests : IDisposable
 
         Assert.True(fake.Cancelled);
         Assert.False(File.Exists(Path.Combine(_dir, "sideload-hs2.json"))); // 部分结果不落盘
+    }
+
+    [Fact]
+    public async Task Sideloader_Success_WritesMeta()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        var fake = new FakeSideloader { Result = new() { ["g1"] = "dir/g1.zipmod" } };
+        var vm = MakeVm(config, db, factory: () => fake);
+
+        vm.ToggleSideloaderCommand.Execute(null);
+        await WaitFor(() => fake.IsRunning);
+        fake.Gate.SetResult();
+        await WaitFor(() => vm.SideloaderState == SideloaderUiState.Success);
+
+        var meta = db.GetMeta();
+        Assert.NotNull(meta);
+        Assert.Equal(SideloadScanStatus.Success, meta.Status);
+        Assert.Equal(1, meta.FoundCount);
+        Assert.True((DateTime.Now - meta.LastScanTime).TotalMinutes < 1);
+        Assert.True(File.Exists(Path.Combine(_dir, "sideload-hs2.meta.json"))); // 独立 meta 文件落盘
+    }
+
+    [Fact]
+    public async Task Sideloader_Stopped_WritesMeta()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        var fake = new FakeSideloader { Result = new() { ["g1"] = "dir/g1.zipmod" } };
+        var vm = MakeVm(config, db, factory: () => fake);
+
+        vm.ToggleSideloaderCommand.Execute(null);
+        await WaitFor(() => fake.IsRunning);
+        vm.ConfirmStopSideloader();
+        await WaitFor(() => vm.SideloaderState == SideloaderUiState.Stopped);
+
+        var meta = db.GetMeta();
+        Assert.NotNull(meta);
+        Assert.Equal(SideloadScanStatus.Stopped, meta.Status);
+        Assert.Equal(1, meta.FoundCount); // 已发现的部分结果数
+    }
+
+    [Fact]
+    public async Task Sideloader_Error_WritesMeta()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        var fake = new FakeSideloader { Throw = new InvalidOperationException("boom") };
+        var vm = MakeVm(config, db, factory: () => fake);
+
+        vm.ToggleSideloaderCommand.Execute(null);
+        await WaitFor(() => fake.IsRunning);
+        fake.Gate.SetResult();
+        await WaitFor(() => vm.SideloaderState == SideloaderUiState.Error);
+
+        var meta = db.GetMeta();
+        Assert.NotNull(meta);
+        Assert.Equal(SideloadScanStatus.Error, meta.Status);
+        Assert.Equal("boom", meta.Error);
     }
 
     // ==================== 缺失 Mod 批量补全 ====================

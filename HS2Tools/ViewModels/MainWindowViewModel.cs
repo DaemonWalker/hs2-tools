@@ -429,12 +429,24 @@ public partial class MainWindowViewModel : ObservableObject
                 // 取消后 Run 正常返回部分结果：不更新数据库，回到已停止状态
                 SideloaderState = SideloaderUiState.Stopped;
                 SideloaderMessage = "已停止";
+                SaveScanMeta(new SideloadScanMeta
+                {
+                    LastScanTime = DateTime.Now,
+                    Status = SideloadScanStatus.Stopped,
+                    FoundCount = result.Count,
+                });
             }
             else
             {
                 _sideloadDb.Update(result);
                 SideloaderState = SideloaderUiState.Success;
                 SideloaderMessage = $"已发现 {result.Count} 个 Mods";
+                SaveScanMeta(new SideloadScanMeta
+                {
+                    LastScanTime = DateTime.Now,
+                    Status = SideloadScanStatus.Success,
+                    FoundCount = result.Count,
+                });
             }
         }
         catch (Exception ex)
@@ -442,10 +454,29 @@ public partial class MainWindowViewModel : ObservableObject
             SideloaderState = SideloaderUiState.Error;
             SideloaderError = ex.Message;
             App.LogException(ex);
+            SaveScanMeta(new SideloadScanMeta
+            {
+                LastScanTime = DateTime.Now,
+                Status = SideloadScanStatus.Error,
+                Error = ex.Message,
+            });
         }
         finally
         {
             _currentSideloader = null;
+        }
+
+        // meta 落盘失败不影响主流程（留痕即可），尤其在异常分支不能再向外抛
+        void SaveScanMeta(SideloadScanMeta meta)
+        {
+            try
+            {
+                _sideloadDb.SaveMeta(meta);
+            }
+            catch (Exception metaEx)
+            {
+                App.LogException(new Exception($"Sideload meta save failed: {metaEx.Message}"));
+            }
         }
     }
 

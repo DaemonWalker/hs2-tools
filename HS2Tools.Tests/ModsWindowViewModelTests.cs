@@ -19,7 +19,7 @@ public class ModsWindowViewModelTests : IDisposable
     }
 
     private static ModsWindowViewModel MakeVm(ConfigService config) =>
-        new(config, new ScannerService());
+        new(config, new ScannerService(), new SideloadDatabaseService(config));
 
     [Fact]
     public void Stats_FromConfigSettings()

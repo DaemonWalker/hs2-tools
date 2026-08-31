@@ -20,20 +20,39 @@ public class ModOrganizeTests : IDisposable
         return gameDir;
     }
 
-    // ==================== BuildPlan 单测 ====================
+    // ==================== BuildPlan 单测（合成路径，不触碰真实文件） ====================
+
+    private const string GamePath = "game";
+    private const string ModsDir = @"game\mods";
+    private const string UnusedDir = @"game\unusedmods";
+    private const string SceneModsDir = @"game\mods\scenemods";
+    private const string DupDir = @"game\duplicatemods";
 
     private static KeyValuePair<string, ModInfo> Entry(string guid, string version = "1.0.0", string? path = null) =>
-        new(guid, new ModInfo { Name = guid, Version = version, Path = path ?? $@"mods\{guid}.zipmod" });
+        new(guid, new ModInfo { Name = guid, Version = version, Path = path ?? $@"{ModsDir}\{guid}.zipmod" });
 
     private static readonly ISet<string> EmptyUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    private static HashSet<string> Usage(params string[] guids) =>
+        new(guids, StringComparer.OrdinalIgnoreCase);
+
+    private static ModOrganizePlan Plan(
+        IReadOnlyList<KeyValuePair<string, ModInfo>> entries,
+        ISet<string>? chara = null,
+        ISet<string>? scene = null,
+        IReadOnlyDictionary<string, string>? siteIndex = null) =>
+        ModOrganizeHelper.BuildPlan(entries,
+            chara ?? EmptyUsage, scene ?? EmptyUsage, siteIndex, GamePath, ModsDir);
 
     [Fact]
     public void BuildPlan_Unused_WhenNeitherCardReferences()
     {
-        var plan = ModOrganizeHelper.BuildPlan([Entry("g-a")], EmptyUsage, EmptyUsage);
+        var plan = Plan([Entry("g-a")]);
 
-        Assert.Single(plan.Unused);
+        var move = Assert.Single(plan.Unused);
+        Assert.Equal(UnusedDir, move.TargetDir);
         Assert.Empty(plan.SceneOnly);
+        Assert.Empty(plan.SitePlaced);
         Assert.Empty(plan.Duplicates);
         Assert.Single(plan.Winners);
     }
@@ -41,54 +60,197 @@ public class ModOrganizeTests : IDisposable
     [Fact]
     public void BuildPlan_SceneOnly_WhenOnlySceneReferences()
     {
-        var sceneUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "g-b" };
-        var plan = ModOrganizeHelper.BuildPlan([Entry("g-b")], EmptyUsage, sceneUsage);
+        var plan = Plan([Entry("g-b")], scene: Usage("g-b"));
 
-        Assert.Single(plan.SceneOnly);
+        var move = Assert.Single(plan.SceneOnly);
+        Assert.Equal(SceneModsDir, move.TargetDir);
         Assert.Empty(plan.Unused);
+        Assert.Empty(plan.SitePlaced);
     }
 
     [Fact]
     public void BuildPlan_Stays_WhenCharaReferences()
     {
-        var charaUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "g-a", "g-b" };
-        var sceneUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "g-b" };
-        var plan = ModOrganizeHelper.BuildPlan([Entry("g-a"), Entry("g-b")], charaUsage, sceneUsage);
+        var plan = Plan([Entry("g-a"), Entry("g-b")], chara: Usage("g-a", "g-b"), scene: Usage("g-b"));
 
         Assert.Empty(plan.Unused);
-        Assert.Empty(plan.SceneOnly); // 人物卡引用的留原地（即使场景也引用）
+        Assert.Empty(plan.SceneOnly);
+        Assert.Empty(plan.SitePlaced); // 人物卡引用的留原地（即使场景也引用）
     }
 
     [Fact]
     public void BuildPlan_DedupFirst_ThenClassifyWinner()
     {
         // 同 GUID 两个版本：v2 赢家进 Unused，v1 落选进 Duplicates
-        var plan = ModOrganizeHelper.BuildPlan(
-            [Entry("g-d", "1.0.0", @"mods\d_v1.zipmod"), Entry("g-d", "2.0.0", @"mods\d_v2.zipmod")],
-            EmptyUsage, EmptyUsage);
+        var plan = Plan(
+            [Entry("g-d", "1.0.0", $@"{ModsDir}\d_v1.zipmod"), Entry("g-d", "2.0.0", $@"{ModsDir}\d_v2.zipmod")]);
 
         Assert.Equal(1, plan.DupGroups);
         var loser = Assert.Single(plan.Duplicates);
-        Assert.Equal("1.0.0", loser.Version);
+        Assert.Equal("1.0.0", loser.Mod.Version);
+        Assert.Equal(DupDir, loser.TargetDir);
         var unused = Assert.Single(plan.Unused);
-        Assert.Equal("2.0.0", unused.Version);
+        Assert.Equal("2.0.0", unused.Mod.Version);
         Assert.Equal("2.0.0", plan.Winners["g-d"].Version);
     }
 
     [Fact]
     public void BuildPlan_GuidMatching_CaseInsensitive()
     {
-        var charaUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "G-A" };
-        var plan = ModOrganizeHelper.BuildPlan(
-            [Entry("g-a"), Entry("g-b"), Entry("g-b", "1.0.0", @"mods\g-b2.zipmod")],
-            charaUsage, EmptyUsage);
+        var plan = Plan(
+            [Entry("g-a"), Entry("g-b"), Entry("g-b", "1.0.0", $@"{ModsDir}\g-b2.zipmod")],
+            chara: Usage("G-A"));
 
-        Assert.Empty(plan.Unused.Concat(plan.SceneOnly).Where(m => m.Name == "g-a")); // g-a 被引用（大小写不同也命中）
-        Assert.Single(plan.Unused); // g-b 赢家未使用
+        Assert.Empty(plan.SitePlaced); // g-a 被引用（大小写不同也命中）留原地
+        Assert.Single(plan.Unused);    // g-b 赢家未使用
         Assert.Single(plan.Duplicates); // g-b 重复落选（同组大小写一致，不重复计）
     }
 
+    [Fact]
+    public void BuildPlan_UnusedInUnusedmods_StaysPut()
+    {
+        var plan = Plan([Entry("g-u", path: $@"{UnusedDir}\u.zipmod")]);
+
+        Assert.Empty(plan.Unused);    // 已在 unusedmods 的未引用 mod 原地不动
+        Assert.Empty(plan.SceneOnly);
+        Assert.Empty(plan.SitePlaced);
+        Assert.Single(plan.Winners);  // 仍是赢家（参与 LocalMods 写回判定）
+    }
+
+    [Fact]
+    public void BuildPlan_CharaUsed_InUnusedmods_MovesBackToModsRoot()
+    {
+        var plan = Plan([Entry("g-u", path: $@"{UnusedDir}\u.zipmod")], chara: Usage("g-u"));
+
+        var move = Assert.Single(plan.SitePlaced);
+        Assert.Equal(ModsDir, move.TargetDir); // 无索引：移回 mods 根目录
+        Assert.Empty(plan.SceneOnly);
+    }
+
+    [Fact]
+    public void BuildPlan_SceneOnly_InUnusedmods_MovesToSceneMods()
+    {
+        var plan = Plan([Entry("g-u", path: $@"{UnusedDir}\u.zipmod")], scene: Usage("g-u"));
+
+        var move = Assert.Single(plan.SceneOnly);
+        Assert.Equal(SceneModsDir, move.TargetDir); // 无索引仅场景：移回进 scenemods
+    }
+
+    [Fact]
+    public void BuildPlan_UsedInIndex_SitePlaced()
+    {
+        var index = new Dictionary<string, string> { ["g-a"] = "Exclusive HS2/a.zipmod" };
+        var plan = Plan([Entry("g-a")], chara: Usage("g-a"), siteIndex: index);
+
+        var move = Assert.Single(plan.SitePlaced);
+        Assert.Equal(Path.Combine(ModsDir, "Exclusive HS2"), move.TargetDir);
+        Assert.Empty(plan.SceneOnly);
+    }
+
+    [Fact]
+    public void BuildPlan_SceneOnlyInIndex_SiteDirWinsOverSceneMods()
+    {
+        var index = new Dictionary<string, string> { ["g-b"] = "Studio/b.zipmod" };
+        var plan = Plan([Entry("g-b")], scene: Usage("g-b"), siteIndex: index);
+
+        var move = Assert.Single(plan.SitePlaced); // 站点目录优先于 scenemods
+        Assert.Equal(Path.Combine(ModsDir, "Studio"), move.TargetDir);
+        Assert.Empty(plan.SceneOnly);
+    }
+
+    [Fact]
+    public void BuildPlan_ReferencedInUnusedmods_WithIndex_MovesToSiteDir()
+    {
+        var index = new Dictionary<string, string> { ["g-u"] = "Exclusive HS2/u.zipmod" };
+        var plan = Plan([Entry("g-u", path: $@"{UnusedDir}\u.zipmod")], chara: Usage("g-u"), siteIndex: index);
+
+        var move = Assert.Single(plan.SitePlaced); // 移回同样适用站点目录规则
+        Assert.Equal(Path.Combine(ModsDir, "Exclusive HS2"), move.TargetDir);
+    }
+
+    [Fact]
+    public void BuildPlan_AlreadyInSiteDir_NotInPlan()
+    {
+        var index = new Dictionary<string, string> { ["g-a"] = "Exclusive HS2/a.zipmod" };
+        var plan = Plan(
+            [Entry("g-a", path: $@"{ModsDir}\Exclusive HS2\a.zipmod")],
+            chara: Usage("g-a"), siteIndex: index);
+
+        Assert.Empty(plan.SitePlaced); // 已在正确位置不动
+        Assert.Empty(plan.Unused);
+        Assert.Empty(plan.SceneOnly);
+    }
+
+    [Fact]
+    public void BuildPlan_IndexPathNoDir_ModsRoot()
+    {
+        var index = new Dictionary<string, string> { ["g-a"] = "a.zipmod" };
+        var plan = Plan([Entry("g-a", path: $@"{ModsDir}\sub\a.zipmod")], chara: Usage("g-a"), siteIndex: index);
+
+        var move = Assert.Single(plan.SitePlaced); // 相对路径无目录部分 → mods 根目录
+        Assert.Equal(ModsDir, move.TargetDir);
+    }
+
+    [Fact]
+    public void BuildPlan_UnusedWithIndex_FlatToUnusedmods()
+    {
+        var index = new Dictionary<string, string> { ["g-c"] = "Exclusive HS2/c.zipmod" };
+        var plan = Plan([Entry("g-c")], siteIndex: index);
+
+        var move = Assert.Single(plan.Unused); // 未使用平铺进 unusedmods，不按站点目录
+        Assert.Equal(UnusedDir, move.TargetDir);
+        Assert.Empty(plan.SitePlaced);
+    }
+
+    [Fact]
+    public void BuildPlan_MaliciousSitePath_TreatedAsNotInIndex()
+    {
+        var index = new Dictionary<string, string>
+        {
+            ["g-a"] = "../evil/a.zipmod",   // 路径穿越
+            ["g-b"] = "C:/evil/b.zipmod",   // rooted
+            ["g-c"] = @"mods\..\..\c.zipmod",
+        };
+        var plan = Plan(
+            [Entry("g-a"), Entry("g-b"), Entry("g-c")],
+            chara: Usage("g-a", "g-b"), scene: Usage("g-c"), siteIndex: index);
+
+        Assert.Empty(plan.SitePlaced); // 都按不在索引处理：人物卡引用留原地
+        var move = Assert.Single(plan.SceneOnly); // 仅场景的仍进 scenemods
+        Assert.Equal("g-c", move.Mod.Name);
+    }
+
+    [Fact]
+    public void BuildPlan_SiteIndexLookup_CaseInsensitive()
+    {
+        var index = new Dictionary<string, string> { ["G-A"] = "Exclusive HS2/a.zipmod" };
+        var plan = Plan([Entry("g-a")], chara: Usage("g-a"), siteIndex: index);
+
+        Assert.Single(plan.SitePlaced); // 索引 GUID 大小写不敏感命中
+    }
+
+    [Fact]
+    public void BuildPlan_DedupAcrossDirs_LoserInUnusedmods_ToDuplicates()
+    {
+        // 跨 mods/unusedmods 两目录分组去重：unusedmods 里的落选者同样进 duplicatemods
+        var plan = Plan(
+            [
+                Entry("g-d", "1.0.0", $@"{UnusedDir}\d_old.zipmod"),
+                Entry("g-d", "2.0.0", $@"{ModsDir}\d_new.zipmod"),
+            ],
+            chara: Usage("g-d"));
+
+        Assert.Equal(1, plan.DupGroups);
+        var loser = Assert.Single(plan.Duplicates);
+        Assert.Equal($@"{UnusedDir}\d_old.zipmod", loser.Mod.Path);
+        Assert.Equal(DupDir, loser.TargetDir);
+        Assert.Empty(plan.SitePlaced); // 赢家在 mods 且被人物卡引用（无索引）→ 原地不动
+    }
+
     // ==================== VM 集成测试 ====================
+
+    private static ModsWindowViewModel MakeVm(ConfigService config, SideloadDatabaseService? db = null) =>
+        new(config, new ScannerService(), db ?? new SideloadDatabaseService(config));
 
     [Fact]
     public async Task Organize_MovesFilesAndUpdatesLocalMods()
@@ -112,7 +274,7 @@ public class ModOrganizeTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = MakeVm(config); // 无 meta：站点索引不参与，行为同整理初版
 
         string? confirmMsg = null;
         vm.OrganizeConfirmationRequested += (_, msg) => confirmMsg = msg;
@@ -156,6 +318,114 @@ public class ModOrganizeTests : IDisposable
     }
 
     [Fact]
+    public async Task Organize_Unusedmods_Referenced_MovesBack()
+    {
+        var gameDir = MakeGameDir();
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
+        var charaDir = Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative);
+        var unusedDir = Path.Combine(gameDir, "unusedmods");
+        Directory.CreateDirectory(unusedDir);
+
+        // unusedmods 里：g-u 被人物卡引用（应移回 mods 根目录）、g-w 无人引用（原地不动）
+        var pathU = TestAssets.WriteZipmod(unusedDir, "u.zipmod", TestAssets.MakeManifest("g-u", "Mod U"));
+        var pathW = TestAssets.WriteZipmod(unusedDir, "w.zipmod", TestAssets.MakeManifest("g-w", "Mod W"));
+        TestAssets.WritePng(charaDir, "chara1.png",
+            TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(["角色甲"], ["g-u"]));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = MakeVm(config); // 无 meta：移回 mods 根目录
+
+        string? confirmMsg = null;
+        vm.OrganizeConfirmationRequested += (_, msg) => confirmMsg = msg;
+        var messages = new List<string>();
+        vm.OrganizeMessageRequested += (_, msg) => messages.Add(msg);
+
+        await vm.OrganizeCommand.ExecuteAsync(null);
+        Assert.NotNull(confirmMsg);
+        Assert.Contains("归位/移回", confirmMsg);
+
+        await vm.ConfirmOrganizeAsync();
+
+        var movedBack = Path.Combine(modsDir, "u.zipmod");
+        Assert.True(File.Exists(movedBack));
+        Assert.False(File.Exists(pathU));
+        Assert.True(File.Exists(pathW)); // 未引用的原地不动
+
+        var localMods = config.Settings.Current.LocalMods;
+        Assert.Equal(movedBack, localMods["g-u"].Path); // 移回的赢家进 LocalMods
+        Assert.False(localMods.ContainsKey("g-w"));     // 留在 unusedmods 的不收录
+
+        Assert.Contains(messages, m => m.Contains("整理完成") && m.Contains("站点归位 1"));
+    }
+
+    [Fact]
+    public async Task Organize_WithMeta_SitePlacement()
+    {
+        var gameDir = MakeGameDir();
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
+        var charaDir = Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative);
+        var sceneDir = Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative);
+
+        // g-a 人物卡引用（在索引）/ g-b 仅场景引用（在索引）/ g-c 无人引用（在索引）
+        var pathA = TestAssets.WriteZipmod(modsDir, "a.zipmod", TestAssets.MakeManifest("g-a", "Mod A"));
+        var pathB = TestAssets.WriteZipmod(modsDir, "b.zipmod", TestAssets.MakeManifest("g-b", "Mod B"));
+        var pathC = TestAssets.WriteZipmod(modsDir, "c.zipmod", TestAssets.MakeManifest("g-c", "Mod C"));
+        TestAssets.WritePng(charaDir, "chara1.png",
+            TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(["角色甲"], ["g-a"]));
+        TestAssets.WritePng(sceneDir, "scene1.png",
+            TestAssets.PngPrefix(), TestAssets.BuildSceneDataRegion("名1", "名2", ["g-b"]));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, string>
+        {
+            ["g-a"] = "Exclusive HS2/a.zipmod",
+            ["g-b"] = "Studio/b.zipmod",
+            ["g-c"] = "Exclusive HS2/c.zipmod",
+        });
+        db.SaveMeta(new SideloadScanMeta
+        {
+            LastScanTime = DateTime.Now,
+            Status = SideloadScanStatus.Success,
+            FoundCount = 3,
+        });
+        var vm = MakeVm(config, db);
+
+        string? confirmMsg = null;
+        vm.OrganizeConfirmationRequested += (_, msg) => confirmMsg = msg;
+        var messages = new List<string>();
+        vm.OrganizeMessageRequested += (_, msg) => messages.Add(msg);
+
+        await vm.OrganizeCommand.ExecuteAsync(null);
+        Assert.NotNull(confirmMsg);
+        Assert.Contains("站点目录归位", confirmMsg);
+
+        await vm.ConfirmOrganizeAsync();
+
+        // 在索引的按站点目录归位（仅场景也优先进站点目录，不进 scenemods）
+        var siteA = Path.Combine(modsDir, "Exclusive HS2", "a.zipmod");
+        var siteB = Path.Combine(modsDir, "Studio", "b.zipmod");
+        Assert.True(File.Exists(siteA));
+        Assert.True(File.Exists(siteB));
+        Assert.False(File.Exists(pathA));
+        Assert.False(File.Exists(pathB));
+        // 未使用的平铺进 unusedmods（不按站点目录）
+        Assert.True(File.Exists(Path.Combine(gameDir, "unusedmods", "c.zipmod")));
+        Assert.False(File.Exists(pathC));
+        Assert.False(Directory.Exists(Path.Combine(modsDir, "scenemods")));
+
+        var localMods = config.Settings.Current.LocalMods;
+        Assert.Equal(2, localMods.Count);
+        Assert.Equal(siteA, localMods["g-a"].Path);
+        Assert.Equal(siteB, localMods["g-b"].Path);
+        Assert.False(localMods.ContainsKey("g-c"));
+
+        Assert.Contains(messages, m => m.Contains("整理完成") && m.Contains("站点归位 2") && m.Contains("未使用 1"));
+    }
+
+    [Fact]
     public async Task Organize_NothingToDo_ShowsNoNeedMessage()
     {
         var gameDir = MakeGameDir();
@@ -167,7 +437,7 @@ public class ModOrganizeTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = MakeVm(config);
 
         string? confirmMsg = null;
         vm.OrganizeConfirmationRequested += (_, msg) => confirmMsg = msg;
@@ -197,7 +467,7 @@ public class ModOrganizeTests : IDisposable
 
         using var config = new ConfigService(_dir);
         config.Update(s => s.Current.GamePath = gameDir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = MakeVm(config);
 
         string? confirmMsg = null;
         vm.OrganizeConfirmationRequested += (_, msg) => confirmMsg = msg;
@@ -220,7 +490,7 @@ public class ModOrganizeTests : IDisposable
     public async Task Organize_NoGamePath_ShowsMessage()
     {
         using var config = new ConfigService(_dir); // 未设 GamePath
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = MakeVm(config);
 
         string? confirmMsg = null;
         vm.OrganizeConfirmationRequested += (_, msg) => confirmMsg = msg;
@@ -237,7 +507,7 @@ public class ModOrganizeTests : IDisposable
     public void Organize_WhileOrganizing_CannotReenter()
     {
         using var config = new ConfigService(_dir);
-        var vm = new ModsWindowViewModel(config, new ScannerService());
+        var vm = MakeVm(config);
         vm.IsOrganizing = true; // 模拟整理中
 
         Assert.False(vm.OrganizeCommand.CanExecute(null));

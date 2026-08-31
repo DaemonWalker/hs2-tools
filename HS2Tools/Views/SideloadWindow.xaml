@@ -39,30 +39,34 @@
         <TextBlock Text="BetterRepack Sideload 数据" FontSize="18" FontWeight="SemiBold"
                    Margin="0,0,0,10" Foreground="{DynamicResource ForegroundBrush}"/>
 
-        <!-- 统计三卡 -->
-        <UniformGrid Grid.Row="1" Columns="3" Margin="0,0,0,10">
-            <Border Style="{StaticResource StatCard}" Margin="0,0,6,0">
-                <StackPanel>
-                    <TextBlock Text="数据库总数" Style="{StaticResource StatTitle}"/>
-                    <TextBlock Text="{Binding TotalCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
-                               Foreground="{DynamicResource AccentBrush}"/>
-                </StackPanel>
-            </Border>
-            <Border Style="{StaticResource StatCard}" Margin="3,0,3,0">
-                <StackPanel>
-                    <TextBlock Text="已存在" Style="{StaticResource StatTitle}"/>
-                    <TextBlock Text="{Binding ExistingCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
-                               Foreground="{DynamicResource SuccessBrush}"/>
-                </StackPanel>
-            </Border>
-            <Border Style="{StaticResource StatCard}" Margin="6,0,0,0">
-                <StackPanel>
-                    <TextBlock Text="缺失" Style="{StaticResource StatTitle}"/>
-                    <TextBlock Text="{Binding MissingCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
-                               Foreground="{DynamicResource ErrorBrush}"/>
-                </StackPanel>
-            </Border>
-        </UniformGrid>
+        <!-- 统计三卡 + 上次扫描信息 -->
+        <StackPanel Grid.Row="1" Margin="0,0,0,10">
+            <UniformGrid Columns="3">
+                <Border Style="{StaticResource StatCard}" Margin="0,0,6,0">
+                    <StackPanel>
+                        <TextBlock Text="数据库总数" Style="{StaticResource StatTitle}"/>
+                        <TextBlock Text="{Binding TotalCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                                   Foreground="{DynamicResource AccentBrush}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource StatCard}" Margin="3,0,3,0">
+                    <StackPanel>
+                        <TextBlock Text="已存在" Style="{StaticResource StatTitle}"/>
+                        <TextBlock Text="{Binding ExistingCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                                   Foreground="{DynamicResource SuccessBrush}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource StatCard}" Margin="6,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="缺失" Style="{StaticResource StatTitle}"/>
+                        <TextBlock Text="{Binding MissingCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                                   Foreground="{DynamicResource ErrorBrush}"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+            <TextBlock Text="{Binding LastScanText}" FontSize="12" Margin="2,6,0,0"
+                       Style="{StaticResource SecondaryText}"/>
+        </StackPanel>
 
         <!-- 搜索（300ms 防抖，匹配 GUID 或下载地址） -->
         <TextBox Grid.Row="2" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"

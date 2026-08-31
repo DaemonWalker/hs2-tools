@@ -19,7 +19,7 @@ public partial class ModsWindow : Window
         if (App.Services is not { } s)
             return; // 测试环境（无 Application）
 
-        var vm = new ModsWindowViewModel(s.Config, s.Scanner);
+        var vm = new ModsWindowViewModel(s.Config, s.Scanner, s.SideloadDb);
 
         // 去重确认框（仿主窗口停止爬虫确认模式）
         vm.DedupConfirmationRequested += (_, msg) =>

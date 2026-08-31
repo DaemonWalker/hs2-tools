@@ -1,4 +1,5 @@
 using System.Text.Json;
+using HS2Tools.Models;
 using HS2Tools.Services;
 
 namespace HS2Tools.Tests;
@@ -126,6 +127,10 @@ public class SideloadDatabaseServiceTests : IDisposable
         Assert.Equal("new/g.zipmod", Assert.Single(db.Database).Value);
     }
 
+    // ==================== 扫描元数据（sideload-{sourceId}.meta.json） ====================
+
+    private string MetaPath(string sourceId) => Path.Combine(_dir, $"sideload-{sourceId}.meta.json");
+
     [Fact]
     public void Kkec_NoUserFile_FallsBackToEmpty_AndLogs()
     {
@@ -146,5 +151,75 @@ public class SideloadDatabaseServiceTests : IDisposable
             ErrorLog.DirectoryOverride = prevOverride;
             TestAssets.DeleteDir(logDir);
         }
+    }
+
+    [Fact]
+    public void Meta_NoFile_ReturnsNull()
+    {
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+        Assert.Null(db.GetMeta()); // 从未扫描
+    }
+
+    [Fact]
+    public void Meta_SaveAndGet_RoundTrip_PersistsAcrossInstances()
+    {
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+        var changed = 0;
+        db.Changed += (_, _) => changed++;
+        var meta = new SideloadScanMeta
+        {
+            LastScanTime = new DateTime(2025, 1, 2, 3, 4, 0),
+            Status = SideloadScanStatus.Success,
+            FoundCount = 42,
+        };
+
+        db.SaveMeta(meta);
+
+        Assert.Equal(1, changed); // 随 Changed 通知
+        Assert.True(File.Exists(MetaPath("hs2")));
+        Assert.Equal(42, db.GetMeta()!.FoundCount); // 缓存命中
+
+        using var config2 = NewConfig();
+        var reloaded = new SideloadDatabaseService(config2);
+        var loaded = reloaded.GetMeta(); // 跨实例从磁盘读回
+        Assert.NotNull(loaded);
+        Assert.Equal(SideloadScanStatus.Success, loaded.Status);
+        Assert.Equal(meta.LastScanTime, loaded.LastScanTime);
+        Assert.Equal(42, loaded.FoundCount);
+    }
+
+    [Fact]
+    public void Meta_IsolatedPerSource()
+    {
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+        db.SaveMeta(new SideloadScanMeta
+        {
+            LastScanTime = DateTime.Now, Status = SideloadScanStatus.Success, FoundCount = 1,
+        });
+
+        config.Update(s => s.CurrentGame = "kk");
+        Assert.Null(db.GetMeta()); // kkec 数据源无 meta
+        Assert.False(File.Exists(MetaPath("kkec")));
+
+        db.SaveMeta(new SideloadScanMeta
+        {
+            LastScanTime = DateTime.Now, Status = SideloadScanStatus.Stopped, FoundCount = 7,
+        });
+        Assert.True(File.Exists(MetaPath("kkec")));
+
+        config.Update(s => s.CurrentGame = "hs2");
+        Assert.Equal(SideloadScanStatus.Success, db.GetMeta()!.Status); // 各数据源独立
+    }
+
+    [Fact]
+    public void Meta_CorruptFile_ReturnsNull()
+    {
+        File.WriteAllText(MetaPath("hs2"), "not-json{");
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+        Assert.Null(db.GetMeta()); // 损坏容错视为无记录
     }
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using HS2Tools.Models;
 
 namespace HS2Tools.Services;
 
@@ -39,6 +40,58 @@ public class SideloadDatabaseService
 
     private string FilePathFor(string sourceId) =>
         Path.Combine(_config.ConfigDir, $"sideload-{sourceId}.json");
+
+    private string MetaPathFor(string sourceId) =>
+        Path.Combine(_config.ConfigDir, $"sideload-{sourceId}.meta.json");
+
+    // ---- 扫描元数据（爬虫最近一次结果，独立 meta 文件）----
+
+    private readonly Dictionary<string, SideloadScanMeta?> _metaCache = new();
+
+    /// <summary>当前数据源的最近扫描元数据；从未扫描 / 文件损坏 → null（损坏留 ErrorLog）</summary>
+    public SideloadScanMeta? GetMeta() => GetMetaFor(CurrentSourceId);
+
+    private SideloadScanMeta? GetMetaFor(string sourceId)
+    {
+        lock (_sync)
+        {
+            if (!_metaCache.TryGetValue(sourceId, out var meta))
+            {
+                meta = LoadMeta(sourceId);
+                _metaCache[sourceId] = meta;
+            }
+            return meta;
+        }
+    }
+
+    private SideloadScanMeta? LoadMeta(string sourceId)
+    {
+        try
+        {
+            var path = MetaPathFor(sourceId);
+            if (!File.Exists(path))
+                return null; // 从未扫描：正常情况不留痕
+            return JsonSerializer.Deserialize<SideloadScanMeta>(File.ReadAllText(path));
+        }
+        catch (Exception ex)
+        {
+            // 文件损坏视为无记录（与库文件损坏回退语义一致），留痕
+            ErrorLog.Log(ex);
+            return null;
+        }
+    }
+
+    /// <summary>写当前数据源的扫描元数据并落盘，随 Changed 事件一起通知</summary>
+    public void SaveMeta(SideloadScanMeta meta)
+    {
+        lock (_sync)
+        {
+            var sourceId = CurrentSourceId;
+            _metaCache[sourceId] = meta;
+            File.WriteAllText(MetaPathFor(sourceId), JsonSerializer.Serialize(meta));
+        }
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>切换游戏时若数据源 ID 变化：取新数据源缓存（懒加载）并通知 UI 刷新</summary>
     private void OnConfigChanged(object? sender, EventArgs e)

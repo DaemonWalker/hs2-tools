@@ -256,4 +256,35 @@ public class SideloadWindowViewModelTests : IDisposable
         Assert.True(vm.IsEmpty);
         Assert.Equal("没有匹配的记录", vm.EmptyText);
     }
+
+    // ==================== 上次扫描信息 ====================
+
+    [Fact]
+    public void LastScanText_NoMeta_ShowsNoRecord()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        var vm = MakeVm(config, db);
+
+        Assert.Equal("上次扫描：无记录", vm.LastScanText);
+    }
+
+    [Fact]
+    public void LastScanText_FormatsThreeStatuses()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        var time = new DateTime(2025, 3, 4, 5, 6, 0);
+
+        db.SaveMeta(new SideloadScanMeta { LastScanTime = time, Status = SideloadScanStatus.Success, FoundCount = 123 });
+        var vm = MakeVm(config, db);
+        Assert.Equal("上次扫描：2025-03-04 05:06（成功结束，发现 123 个 Mods）", vm.LastScanText);
+
+        // SaveMeta 触发 Changed → Reload 刷新（UiDispatch 在测试环境直跑）
+        db.SaveMeta(new SideloadScanMeta { LastScanTime = time, Status = SideloadScanStatus.Stopped, FoundCount = 45 });
+        Assert.Equal("上次扫描：2025-03-04 05:06（已停止，已发现 45 个）", vm.LastScanText);
+
+        db.SaveMeta(new SideloadScanMeta { LastScanTime = time, Status = SideloadScanStatus.Error, Error = "网络超时" });
+        Assert.Equal("上次扫描：2025-03-04 05:06（异常终止：网络超时）", vm.LastScanText);
+    }
 }

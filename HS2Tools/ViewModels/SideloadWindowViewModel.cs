@@ -99,6 +99,24 @@ public partial class SideloadWindowViewModel : ObservableObject
         ? "暂无 Sideload 数据，请前往首页点击「更新 Sideload 数据」"
         : "没有匹配的记录";
 
+    /// <summary>上次爬虫扫描信息（随 Reload 刷新）</summary>
+    public string LastScanText
+    {
+        get
+        {
+            var meta = _sideloadDb.GetMeta();
+            if (meta is null)
+                return "上次扫描：无记录";
+            var time = meta.LastScanTime.ToString("yyyy-MM-dd HH:mm");
+            return meta.Status switch
+            {
+                SideloadScanStatus.Success => $"上次扫描：{time}（成功结束，发现 {meta.FoundCount} 个 Mods）",
+                SideloadScanStatus.Stopped => $"上次扫描：{time}（已停止，已发现 {meta.FoundCount} 个）",
+                _ => $"上次扫描：{time}（异常终止：{meta.Error}）",
+            };
+        }
+    }
+
     partial void OnSearchTextChanged(string value) => _ = DebounceFilterAsync(value);
 
     /// <summary>
@@ -155,6 +173,7 @@ public partial class SideloadWindowViewModel : ObservableObject
 
         ApplyFilter(SearchText);
         OnPropertyChanged(nameof(EmptyText));
+        OnPropertyChanged(nameof(LastScanText));
     }
 
     private DownloadTask? FindTask(string guid) => _downloads.Tasks.FirstOrDefault(t => t.Id == guid);

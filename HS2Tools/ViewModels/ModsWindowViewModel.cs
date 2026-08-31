@@ -27,12 +27,14 @@ public partial class ModsWindowViewModel : ObservableObject
 {
     private readonly ConfigService _config;
     private readonly ScannerService _scanner;
+    private readonly SideloadDatabaseService _sideloadDb;
     private List<ModItemViewModel> _all = new();
 
-    public ModsWindowViewModel(ConfigService config, ScannerService scanner)
+    public ModsWindowViewModel(ConfigService config, ScannerService scanner, SideloadDatabaseService sideloadDb)
     {
         _config = config;
         _scanner = scanner;
+        _sideloadDb = sideloadDb;
 
         Reload();
         Mods.CollectionChanged += (_, _) => OnPropertyChanged(nameof(IsEmpty));
@@ -97,11 +99,8 @@ public partial class ModsWindowViewModel : ObservableObject
     private List<ModInfo>? _pendingLosers;
     private string? _pendingDupDir;
 
-    // 整理待执行计划（确认后由 ConfirmOrganizeAsync 消费）
+    // 整理待执行计划（确认后由 ConfirmOrganizeAsync 消费；目标目录已在计划内）
     private ModOrganizePlan? _pendingPlan;
-    private string? _pendingOrganizeDupDir;
-    private string? _pendingUnusedDir;
-    private string? _pendingSceneModsDir;
 
     public bool IsEmpty => Mods.Count == 0;
 
@@ -302,9 +301,10 @@ public partial class ModsWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 整理（分析阶段）：重扫 mods 目录（排除下载目录与 mods/scenemods），实时分别扫描
-    /// 人物卡/场景卡 PNG 引用（现有 ModUsage 缓存是两卡合并口径，区分不了"仅场景"），
-    /// 先按去重规则裁决同 GUID 重复，再按引用分类；有活可干则暂存计划并请求确认。
+    /// 整理（分析阶段）：重扫 mods 目录（排除下载目录与 mods/scenemods）外加 unusedmods，
+    /// 实时分别扫描人物卡/场景卡 PNG 引用（现有 ModUsage 缓存是两卡合并口径，区分不了"仅场景"），
+    /// 先按去重规则裁决同 GUID 重复，再按引用与站点索引分类（有扫描记录才按站点目录归位）；
+    /// 有活可干则暂存计划并请求确认。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanOrganize))]
     private async Task OrganizeAsync()
@@ -326,26 +326,37 @@ public partial class ModsWindowViewModel : ObservableObject
             var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } })
                 .Where(f => !IsUnderDir(f, downloadDir) && !IsUnderDir(f, sceneModsDir))
                 .ToList();
+            // unusedmods 一并扫描：被引用的移回 mods，未引用的原地不动
+            var unusedDir = Path.Combine(gamePath, "unusedmods");
+            if (Directory.Exists(unusedDir))
+                files.AddRange(_scanner.ScanDirectory(unusedDir, new ScanOptions { TargetExtension = { ".zipmod" } }));
             var entries = await _scanner.ReadZipModBatchListAsync(files, onError: LogScanError);
 
             var charaUsage = await ScanPngUsageSetAsync(_config.GetCharaDir());
             var sceneUsage = await ScanPngUsageSetAsync(_config.GetSceneDir());
 
-            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage);
-            if (plan.Duplicates.Count == 0 && plan.Unused.Count == 0 && plan.SceneOnly.Count == 0)
+            // 有扫描记录（meta 存在）才按站点目录归位，否则站点索引不参与分类
+            var siteIndex = _sideloadDb.GetMeta() is not null ? _sideloadDb.Database : null;
+            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage, siteIndex, gamePath, modsDir);
+            if (plan.Duplicates.Count == 0 && plan.Unused.Count == 0 &&
+                plan.SceneOnly.Count == 0 && plan.SitePlaced.Count == 0)
             {
                 OrganizeMessageRequested?.Invoke(this, "Mods 无需整理");
                 return;
             }
 
             _pendingPlan = plan;
-            _pendingOrganizeDupDir = Path.Combine(gamePath, "duplicatemods");
-            _pendingUnusedDir = Path.Combine(gamePath, "unusedmods");
-            _pendingSceneModsDir = sceneModsDir;
+            var segments = new List<string>();
+            if (plan.Duplicates.Count > 0)
+                segments.Add($"{plan.Duplicates.Count} 个重复落选文件（{plan.DupGroups} 组，保留规则：版本高 → 体积大 → 日期新）移动到 duplicatemods");
+            if (plan.Unused.Count > 0)
+                segments.Add($"{plan.Unused.Count} 个未使用 Mods 移动到 unusedmods");
+            if (plan.SceneOnly.Count > 0)
+                segments.Add($"{plan.SceneOnly.Count} 个仅场景引用的 Mods 移动到 mods\\scenemods");
+            if (plan.SitePlaced.Count > 0)
+                segments.Add($"{plan.SitePlaced.Count} 个 Mods 按站点目录归位/移回 mods");
             OrganizeConfirmationRequested?.Invoke(this,
-                $"整理 Mods 将把：{plan.Duplicates.Count} 个重复落选文件（{plan.DupGroups} 组，保留规则：版本高 → 体积大 → 日期新）" +
-                $"移动到 duplicatemods，{plan.Unused.Count} 个未使用 Mods 移动到 unusedmods，" +
-                $"{plan.SceneOnly.Count} 个仅场景引用的 Mods 移动到 mods\\scenemods。是否继续？");
+                $"整理 Mods 将把：{string.Join("，", segments)}。是否继续？");
         }
         finally
         {
@@ -353,43 +364,49 @@ public partial class ModsWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>整理（执行阶段）：三类文件分别移入目标目录，LocalMods 同步写回</summary>
+    /// <summary>整理（执行阶段）：各类文件分别移入计划目标目录，LocalMods 同步写回</summary>
     public async Task ConfirmOrganizeAsync()
     {
-        if (_pendingPlan is not { } plan || _pendingOrganizeDupDir is not { } dupDir ||
-            _pendingUnusedDir is not { } unusedDir || _pendingSceneModsDir is not { } sceneModsDir)
+        if (_pendingPlan is not { } plan)
             return;
         _pendingPlan = null;
-        _pendingOrganizeDupDir = null;
-        _pendingUnusedDir = null;
-        _pendingSceneModsDir = null;
 
         IsOrganizing = true;
-        var (dupMoved, unusedMoved, sceneMoved, failed) = (0, 0, 0, 0);
+        var (dupMoved, unusedMoved, sceneMoved, siteMoved, failed) = (0, 0, 0, 0, 0);
         try
         {
             await Task.Run(() =>
             {
-                foreach (var dup in plan.Duplicates)
+                // 移动成功统一改写 Path（与 plan.Winners 同一引用），供 LocalMods 按最终落点写回
+                foreach (var move in plan.Duplicates)
                 {
-                    if (TryOrganizeMove(dup, dupDir) is not null)
-                        dupMoved++;
-                    else
-                        failed++;
-                }
-                foreach (var mod in plan.Unused)
-                {
-                    if (TryOrganizeMove(mod, unusedDir) is not null)
-                        unusedMoved++;
-                    else
-                        failed++;
-                }
-                foreach (var mod in plan.SceneOnly)
-                {
-                    // 移动成功直接改写 Path（与 plan.Winners 同一引用），供 LocalMods 写回
-                    if (TryOrganizeMove(mod, sceneModsDir) is { } newPath)
+                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
                     {
-                        mod.Path = newPath;
+                        move.Mod.Path = newPath;
+                        dupMoved++;
+                    }
+                    else
+                    {
+                        failed++;
+                    }
+                }
+                foreach (var move in plan.Unused)
+                {
+                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
+                    {
+                        move.Mod.Path = newPath;
+                        unusedMoved++;
+                    }
+                    else
+                    {
+                        failed++;
+                    }
+                }
+                foreach (var move in plan.SceneOnly)
+                {
+                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
+                    {
+                        move.Mod.Path = newPath;
                         sceneMoved++;
                     }
                     else
@@ -397,22 +414,44 @@ public partial class ModsWindowViewModel : ObservableObject
                         failed++;
                     }
                 }
+                foreach (var move in plan.SitePlaced)
+                {
+                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
+                    {
+                        move.Mod.Path = newPath;
+                        siteMoved++;
+                    }
+                    else
+                    {
+                        failed++;
+                    }
+                }
             });
 
-            // LocalMods 写回：未动赢家保留、SceneOnly 的 Path 已更新、Unused 移除（移出 mods 目录不再是本地 mod）
-            var unusedSet = new HashSet<ModInfo>(plan.Unused);
+            // LocalMods 写回以最终落点为准：仍在 mods 目录下的赢家才是本地 mod
+            // （SceneOnly/SitePlaced 的 Path 已更新；移进或留在 unusedmods 的不收录；移动失败的保留原样）
+            var modsDirNow = _config.GetModsDir();
             _config.Update(s =>
             {
                 var mods = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
                 foreach (var (guid, info) in plan.Winners)
                 {
-                    if (!unusedSet.Contains(info))
+                    if (modsDirNow is null || IsUnderDir(info.Path, modsDirNow))
                         mods[guid] = info;
                 }
                 s.Current.LocalMods = mods;
             });
 
-            var summary = $"整理完成：去重 {dupMoved}、未使用 {unusedMoved}、场景专用 {sceneMoved}";
+            var parts = new List<string>();
+            if (dupMoved > 0)
+                parts.Add($"去重 {dupMoved}");
+            if (unusedMoved > 0)
+                parts.Add($"未使用 {unusedMoved}");
+            if (sceneMoved > 0)
+                parts.Add($"场景专用 {sceneMoved}");
+            if (siteMoved > 0)
+                parts.Add($"站点归位 {siteMoved}");
+            var summary = $"整理完成：{string.Join("、", parts)}";
             if (failed > 0)
                 summary += $"（{failed} 个失败）";
             OrganizeMessageRequested?.Invoke(this, summary);
