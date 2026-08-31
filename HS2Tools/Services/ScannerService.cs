@@ -7,11 +7,14 @@ using System.Collections.Concurrent;
 namespace HS2Tools.Services;
 
 /// <summary>
-/// 扫描与解析服务（Go internal/scanner 的 1:1 移植，含所有字节级 hack）。
+/// 扫描与解析服务。
+/// 目录扫描 / zipmod / 文件操作是 Go internal/scanner 的 1:1 移植（含字节级 hack）；
+/// 卡片/场景数据区解析以 IllusionModdingAPI/BepisPlugins 为基准做结构化解析
+/// （CharaCardParser），旧字节扫描（SearchBuffer）仅作数据区内的回退路径。
 /// </summary>
 public class ScannerService
 {
-    // 标记定义（Unity BinaryWriter 序列化上下文关键词）
+    // 标记定义（回退路径：结构化解析失败时的旧字节扫描，Unity BinaryWriter 序列化上下文关键词）
     private static readonly byte[] NameStart = "fullname"u8.ToArray();
     private static readonly byte[] NameEnd = "personality"u8.ToArray();
     private static readonly byte[] ModStart = "ModID"u8.ToArray();
@@ -124,26 +127,54 @@ public class ScannerService
 
     // ==================== PNG 解析 ====================
 
-    /// <summary>从 PNG 文件中提取所有 Mod GUID</summary>
+    /// <summary>从 PNG 文件中提取所有 Mod GUID（先结构化解析，失败回退数据区字节扫描）</summary>
     public List<string> ReadPngMods(string filePath)
     {
         if (!FileExists(filePath))
             return new List<string>();
         var data = File.ReadAllBytes(filePath);
-        return SearchBuffer(ModStart, ModEnd, data);
+        return ExtractFromGameData(data, wantNames: false);
     }
 
-    /// <summary>从 PNG 文件中提取所有角色名称</summary>
+    /// <summary>从 PNG 文件中提取所有角色名称（先结构化解析，失败回退数据区字节扫描）</summary>
     public List<string> ReadPngNames(string filePath)
     {
         if (!FileExists(filePath))
             return new List<string>();
         var data = File.ReadAllBytes(filePath);
-        return SearchBuffer(NameStart, NameEnd, data);
+        return ExtractFromGameData(data, wantNames: true);
     }
 
     /// <summary>
-    /// 从 Buffer 中循环提取所有 [start...end] 区间的字符串（Go searchBuffer）。
+    /// 名称/Mod 提取主路径：结构化解析数据区；StructuralOk=false 时回退旧 SearchBuffer，
+    /// 扫描范围收窄为数据区（不再扫 PNG 图像字节）；无 IEND 时整体视作数据区回退扫描。
+    /// </summary>
+    private static List<string> ExtractFromGameData(byte[] data, bool wantNames)
+    {
+        var offset = GetDataRegionOffset(data);
+        if (offset >= 0)
+        {
+            var (names, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsSpan(offset));
+            if (structuralOk)
+                return wantNames ? names : modIds;
+            ErrorLog.Log($"structural parse failed, fallback to byte scan in data region ({data.Length - offset} bytes)");
+            return SearchBuffer(wantNames ? NameStart : ModStart, wantNames ? NameEnd : ModEnd, data[offset..]);
+        }
+        // 无 IEND（非卡片文件）：保持旧行为，全文件回退扫描
+        return SearchBuffer(wantNames ? NameStart : ModStart, wantNames ? NameEnd : ModEnd, data);
+    }
+
+    /// <summary>数据区起点 = 最后一个 IEND 的 'D' 之后 + 4 字节 CRC（越界钳制）；无 IEND 返回 -1</summary>
+    internal static int GetDataRegionOffset(byte[] data)
+    {
+        var iend = FindLastIend(data);
+        if (iend < 0)
+            return -1;
+        return Math.Min(iend + 4, data.Length);
+    }
+
+    /// <summary>
+    /// 回退路径：从 Buffer 中循环提取所有 [start...end] 区间的字符串（Go searchBuffer）。
     /// 命中区间去首尾各 1 字节再 Trim；结果去重且无序。
     /// </summary>
     internal static List<string> SearchBuffer(byte[] start, byte[] end, byte[] data)
@@ -206,11 +237,12 @@ public class ScannerService
         }
 
         var endIndex = FindLastIend(data);
-        if (endIndex < 0 || endIndex > data.Length)
+        if (endIndex < 0)
             return "";
 
-        // 截取纯 PNG 图像数据
-        return Convert.ToBase64String(data, 0, endIndex);
+        // 截取纯 PNG 图像数据（含 IEND 的 4 字节 CRC，得到完整 PNG；越界钳制）
+        var end = Math.Min(endIndex + 4, data.Length);
+        return Convert.ToBase64String(data, 0, end);
     }
 
     /// <summary>
@@ -238,11 +270,22 @@ public class ScannerService
         if (iendIndex < 0)
             throw new InvalidDataException("IEND marker not found");
 
+        var offset = Math.Min(iendIndex + 4, data.Length);
+        var (names, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsSpan(offset));
+        if (!structuralOk)
+        {
+            ErrorLog.Log($"ParsePngData structural parse failed, fallback to byte scan: {filePath}");
+            var region = data[offset..];
+            names = SearchBuffer(NameStart, NameEnd, region);
+            modIds = SearchBuffer(ModStart, ModEnd, region);
+        }
+
         return new PngParseResult
         {
-            ModIDs = SearchBuffer(ModStart, ModEnd, data),
-            CharaNames = SearchBuffer(NameStart, NameEnd, data),
-            GameDataLen = data.Length - iendIndex,
+            ModIDs = modIds,
+            CharaNames = names,
+            // 真正的追加数据长度（IEND 'D' 之后 + 4 字节 CRC），下界钳 0
+            GameDataLen = Math.Max(0, data.Length - (iendIndex + 4)),
         };
     }
 
@@ -333,10 +376,14 @@ public class ScannerService
             {
                 return null;
             }
-            names = SearchBuffer(NameStart, NameEnd, data);
+            names = ExtractFromGameData(data, wantNames: true);
             var endIndex = FindLastIend(data);
-            if (endIndex >= 0 && endIndex <= data.Length)
-                image = Convert.ToBase64String(data, 0, endIndex);
+            if (endIndex >= 0)
+            {
+                // 缩略图含 IEND 的 4 字节 CRC（完整 PNG；越界钳制）
+                var end = Math.Min(endIndex + 4, data.Length);
+                image = Convert.ToBase64String(data, 0, end);
+            }
         }
 
         return new PngPageDataResult { Path = filePath, Names = names, ImageData = image };

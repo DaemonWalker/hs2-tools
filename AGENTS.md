@@ -12,6 +12,7 @@ HS2-Tools 是一个基于 **.NET 8 + WPF** 的桌面应用，用于管理 Honey 
 | **技术栈** | .NET 8 LTS + WPF（`net8.0-windows`） |
 | **UI 模式** | MVVM（CommunityToolkit.Mvvm，源生成器） |
 | **HTML 解析** | HtmlAgilityPack |
+| **MessagePack** | MessagePack-CSharp 3.x（仅底层 Reader/Writer 步行，卡片/场景结构化解析） |
 | **测试** | xUnit（`HS2Tools.Tests`） |
 | **配置存储** | 统一强类型配置 `%AppData%/hs2-tools/settings.json`（ConfigService） |
 | **日志** | `Services/ErrorLog.cs` → `%AppData%/hs2-tools/error.log`（永不抛出） |
@@ -20,7 +21,7 @@ HS2-Tools 是一个基于 **.NET 8 + WPF** 的桌面应用，用于管理 Honey 
 
 ```
 HS2Tools/
-├── Services/      # 核心服务单例（Config/Scanner/Downloader+DownloadManager/
+├── Services/      # 核心服务单例（Config/Scanner+CharaCardParser/Downloader+DownloadManager/
 │                  #   Sideloader/SideloadDatabase/GameLauncher/ErrorLog），与 UI 解耦可单测
 ├── ViewModels/    # 每页一个 VM（+ 共用 CardDetailViewModel）
 ├── Views/         # 每页一个独立 Window（WindowManager 单例 + Hide/Show 保状态）
@@ -45,7 +46,8 @@ dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
 ## 关键约定
 
 - **状态下沉服务层单例**，Window 只是视图；跨窗体通信走服务事件；VM/窗口与服务同寿，永久订阅。
-- **行为保真**：解析/扫描/下载/爬虫逻辑按既定行为 1:1 复刻（字节级 hack 全部保留，注释注明出处）；解析器的网络/编码边界行为有既定口径，改动前先读相关注释与测试。
+- **行为保真**：扫描/下载/爬虫逻辑按既定行为 1:1 复刻（字节级 hack 全部保留，注释注明出处）；网络/编码边界行为有既定口径，改动前先读相关注释与测试。
+- **卡片/场景解析**：以 IllusionModdingAPI/BepisPlugins 为基准做结构化解析（`CharaCardParser`：`【AIS_Chara】` BlockHeader + KKEx/UAR，MessagePack-CSharp 底层 Reader/Writer）；旧字节扫描（`SearchBuffer`）仅作数据区内回退路径，不再全文件扫描。
 - 不得"静默吞错"：跳过的条目、失败的任务至少 `ErrorLog` 记一条；用户可见失败统一"XX失败：原因"。
 - 长任务（扫描/补全/爬虫/整理）防重入：CanExecute + 标志位双保险；取消一律 CancellationTokenSource。
 - 测试夹具程序化合成（PNG 标记字节 / zipmod），不提交大文件；ErrorLog 在测试中统一重定向临时目录。

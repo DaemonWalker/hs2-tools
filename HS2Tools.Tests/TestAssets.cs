@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using System.Buffers;
 using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using HS2Tools.Services;
+using MessagePack;
 
 namespace HS2Tools.Tests;
 
@@ -77,6 +79,167 @@ internal static class TestAssets
         ms.WriteByte(0x06);
         ms.Write("Slot"u8.ToArray());
         ms.WriteByte(0x07);
+        return ms.ToArray();
+    }
+
+    // ==================== 结构化数据区夹具（MessagePack 合成，IEND+CRC 之后的部分） ====================
+
+    /// <summary>
+    /// 合成结构完整的 HS2 角色卡数据区：productNo +【AIS_Chara】+ version + lang/userID/dataID
+    /// + BlockHeader（msgpack {lstInfo:[[name,version,pos,size]]}）+ Parameter/Parameter2/KKEx 块。
+    /// names[0] → Parameter.fullname，names[1] → Parameter2.fullname；
+    /// guids → UAR 插件 ResolveInfo；otherPluginGuids → 其他插件数据（命名空间隔离测试用）。
+    /// </summary>
+    public static byte[] BuildCharaDataRegion(string[] names, string[] guids, string[]? otherPluginGuids = null)
+        => BuildCharaBlob(names, guids, otherPluginGuids);
+
+    /// <summary>合成坐标卡数据区：【AIS_Clothes】头 + 占位衣着数据 + 文件尾 KKEx trailer</summary>
+    public static byte[] BuildClothesDataRegion(string[] guids)
+    {
+        using var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
+        bw.Write(100);                 // loadProductNo
+        bw.Write("【AIS_Clothes】");   // 7bit 前缀标记
+        bw.Write("1.0.0");             // version
+        bw.Write(new byte[] { 1, 2, 3, 4 }); // 占位衣着数据
+        bw.Flush();
+        ms.Write(BuildKkexTrailer(guids));
+        return ms.ToArray();
+    }
+
+    /// <summary>合成场景数据区：两个内嵌 chara blob（各一名）+ 场景尾标 + 文件尾 KKEx trailer</summary>
+    public static byte[] BuildSceneDataRegion(string name1, string name2, string[] trailerGuids)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(BuildCharaBlob(new[] { name1 }, Array.Empty<string>()));
+        ms.Write("【StudioNEOV2】"u8.ToArray()); // 场景尾标
+        ms.Write(BuildCharaBlob(new[] { name2 }, Array.Empty<string>()));
+        ms.Write(BuildKkexTrailer(trailerGuids));
+        return ms.ToArray();
+    }
+
+    /// <summary>单个 ChaFile blob（BinaryWriter 布局，与游戏序列化一致）</summary>
+    private static byte[] BuildCharaBlob(string[] names, string[] guids, string[]? otherPluginGuids = null)
+    {
+        var infos = new List<(string Name, byte[] Data)>();
+        if (names.Length > 0)
+            infos.Add(("Parameter", BuildFullnameBlock(names[0])));
+        if (names.Length > 1)
+            infos.Add(("Parameter2", BuildFullnameBlock(names[1])));
+        infos.Add(("KKEx", BuildKkexBlock(guids, otherPluginGuids)));
+
+        // BlockHeader msgpack（BlockHeader 是 [MessagePackObject(true)] map；Info 是数组式 4 元素）
+        var headerBuffer = new ArrayBufferWriter<byte>();
+        {
+            var w = new MessagePackWriter(headerBuffer);
+            w.WriteMapHeader(1);
+            w.Write("lstInfo");
+            w.WriteArrayHeader(infos.Count);
+            long pos = 0;
+            foreach (var (name, data) in infos)
+            {
+                w.WriteArrayHeader(4);
+                w.Write(name);
+                w.Write("1.0.0"); // block version
+                w.Write(pos);
+                w.Write((long)data.Length);
+                pos += data.Length;
+            }
+            w.Flush();
+        }
+        var headerBytes = headerBuffer.WrittenSpan.ToArray();
+
+        using var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
+        bw.Write(100);               // loadProductNo
+        bw.Write("【AIS_Chara】");   // 7bit 前缀标记
+        bw.Write("1.0.0");           // ChaFileVersion
+        bw.Write(0);                 // lang
+        bw.Write("user");            // userID
+        bw.Write("data");            // dataID
+        bw.Write(headerBytes.Length);
+        bw.Write(headerBytes);
+        bw.Write((long)infos.Sum(i => i.Data.Length)); // 块数据总长度
+        foreach (var (_, data) in infos)
+            bw.Write(data);
+        bw.Flush();
+        return ms.ToArray();
+    }
+
+    /// <summary>Parameter 块：msgpack map（字符串键），含 fullname + 干扰键</summary>
+    private static byte[] BuildFullnameBlock(string fullname)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var w = new MessagePackWriter(buffer);
+        w.WriteMapHeader(3);
+        w.Write("lastname");
+        w.Write("姓");
+        w.Write("fullname");
+        w.Write(fullname);
+        w.Write("personality");
+        w.Write(12);
+        w.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    /// KKEx msgpack：map&lt;插件ID, [version, data]&gt;；UAR data["info"] = array of bin，
+    /// 每个 bin 是一条 ResolveInfo msgpack map（"ModID"/"Slot"）。otherPluginGuids 写入
+    /// 无关插件（含同名 "ModID" 键），验证命名空间隔离。
+    /// </summary>
+    private static byte[] BuildKkexBlock(string[] guids, string[]? otherPluginGuids = null)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var w = new MessagePackWriter(buffer);
+        w.WriteMapHeader(otherPluginGuids is { Length: > 0 } ? 2 : 1);
+        w.Write("com.bepis.sideloader.universalautoresolver");
+        w.WriteArrayHeader(2);
+        w.Write(2); // plugin data version
+        w.WriteMapHeader(1);
+        w.Write("info");
+        w.WriteArrayHeader(guids.Length);
+        foreach (var guid in guids)
+            w.Write(BuildResolveInfo(guid));
+        if (otherPluginGuids is { Length: > 0 })
+        {
+            w.Write("com.other.plugin");
+            w.WriteArrayHeader(2);
+            w.Write(1);
+            w.WriteMapHeader(1);
+            w.Write("info");
+            w.WriteArrayHeader(otherPluginGuids.Length);
+            foreach (var guid in otherPluginGuids)
+                w.Write(BuildResolveInfo(guid));
+        }
+        w.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>ResolveInfo：msgpack map（字符串键）"ModID"/"Slot"</summary>
+    private static byte[] BuildResolveInfo(string guid)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var w = new MessagePackWriter(buffer);
+        w.WriteMapHeader(2);
+        w.Write("ModID");
+        w.Write(guid);
+        w.Write("Slot");
+        w.Write(200001);
+        w.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>KKEx trailer：7bit 前缀 "KKEx" + int32 version + int32 length + msgpack map</summary>
+    private static byte[] BuildKkexTrailer(string[] guids)
+    {
+        var payload = BuildKkexBlock(guids);
+        using var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
+        bw.Write("KKEx");         // 7bit 前缀字符串
+        bw.Write(2);              // int32 version
+        bw.Write(payload.Length); // int32 length
+        bw.Write(payload);
+        bw.Flush();
         return ms.ToArray();
     }
 

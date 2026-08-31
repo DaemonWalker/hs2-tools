@@ -182,25 +182,103 @@ public class ScannerTests : IDisposable
         Assert.Empty(result);
     }
 
-    // ==================== PNG 读取 ====================
+    // ==================== PNG 读取（结构化解析主路径） ====================
 
     [Fact]
     public void ReadPngNames_ExtractsUtf8Name()
     {
-        var path = TestAssets.WritePng(_dir, "card.png", TestAssets.PngPrefix(), TestAssets.NameMarker("测试角色"));
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(new[] { "测试角色" }, Array.Empty<string>()));
         var names = _svc.ReadPngNames(path);
         Assert.Equal(new[] { "测试角色" }, names);
+    }
+
+    [Fact]
+    public void ReadPngNames_ParameterAndParameter2_InOrder()
+    {
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(new[] { "第一", "第二" }, Array.Empty<string>()));
+        var names = _svc.ReadPngNames(path);
+        Assert.Equal(new[] { "第一", "第二" }, names);
     }
 
     [Fact]
     public void ReadPngMods_ExtractsGuids()
     {
         var path = TestAssets.WritePng(_dir, "card.png",
-            TestAssets.PngPrefix(), TestAssets.ModMarker("com.mod.a"), TestAssets.ModMarker("com.mod.b"));
+            TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(Array.Empty<string>(), new[] { "com.mod.a", "com.mod.b" }));
         var mods = _svc.ReadPngMods(path);
-        Assert.Equal(2, mods.Count);
-        Assert.Contains("com.mod.a", mods);
-        Assert.Contains("com.mod.b", mods);
+        Assert.Equal(new[] { "com.mod.a", "com.mod.b" }, mods);
+    }
+
+    [Fact]
+    public void ReadPngMods_KkexNamespaceIsolation()
+    {
+        // 其他插件数据里含同名 "ModID" 键：不得误报（KKEx 插件 ID 命名空间隔离）
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(
+                Array.Empty<string>(), new[] { "com.mod.real" }, new[] { "com.other.fake" }));
+        var mods = _svc.ReadPngMods(path);
+        Assert.Equal(new[] { "com.mod.real" }, mods);
+    }
+
+    [Fact]
+    public void ReadPngMods_ClothesCard_ExtractsFromKkexTrailer()
+    {
+        // 坐标卡：【AIS_Clothes】头，mod 数据在文件尾 KKEx trailer
+        var path = TestAssets.WritePng(_dir, "clothes.png",
+            TestAssets.PngPrefix(), TestAssets.BuildClothesDataRegion(new[] { "com.mod.outfit" }));
+        var mods = _svc.ReadPngMods(path);
+        Assert.Equal(new[] { "com.mod.outfit" }, mods);
+    }
+
+    [Fact]
+    public void ParsePngData_Scene_TwoCharaBlobsAndTrailer()
+    {
+        // 场景：两个内嵌 chara blob + KKEx trailer
+        var path = TestAssets.WritePng(_dir, "scene.png",
+            TestAssets.PngPrefix(), TestAssets.BuildSceneDataRegion("角色甲", "角色乙", new[] { "com.mod.scene" }));
+        var result = _svc.ParsePngData(path);
+        Assert.Equal(new[] { "角色甲", "角色乙" }, result.CharaNames);
+        Assert.Equal(new[] { "com.mod.scene" }, result.ModIDs);
+    }
+
+    // ==================== PNG 读取（回退路径） ====================
+
+    [Fact]
+    public void ReadPngNames_NoMarker_FallsBackToByteScan()
+    {
+        // 无【AIS_Chara】标记 → 结构解析失败，回退旧 SearchBuffer（仅数据区）
+        var path = TestAssets.WritePng(_dir, "card.png", TestAssets.PngPrefix(), TestAssets.NameMarker("回退角色"));
+        var names = _svc.ReadPngNames(path);
+        Assert.Equal(new[] { "回退角色" }, names);
+    }
+
+    [Fact]
+    public void ReadPngNames_MarkerInImageRegion_NotReported()
+    {
+        // 回退路径不再扫 PNG 图像字节：图像区（IEND 之前）里的标记不命中，数据区里的才命中
+        var prefixHead = TestAssets.PngPrefix()[..^8]; // 去掉末尾 IEND + CRC
+        var path = TestAssets.WritePng(_dir, "card.png",
+            prefixHead, TestAssets.NameMarker("图像区假名"),
+            "IEND"u8.ToArray(), new byte[] { 0xAE, 0x42, 0x60, 0x82 },
+            TestAssets.NameMarker("数据区真名"));
+        var names = _svc.ReadPngNames(path);
+        Assert.Equal(new[] { "数据区真名" }, names);
+    }
+
+    [Fact]
+    public void ReadPngMods_CorruptedBlob_NoThrow_FallsBack()
+    {
+        // 有【AIS_Chara】标记但 blob 损坏（长度前缀对、后续全是垃圾）→ 不抛，回退字节扫描
+        var corrupt = new byte[] { 0x0F }
+            .Concat("【AIS_Chara】"u8.ToArray())
+            .Concat(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF })
+            .ToArray();
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), corrupt, TestAssets.ModMarker("com.mod.fallback"));
+        var mods = _svc.ReadPngMods(path);
+        Assert.Equal(new[] { "com.mod.fallback" }, mods);
     }
 
     [Fact]
@@ -221,8 +299,8 @@ public class ScannerTests : IDisposable
         var base64 = _svc.ReadPngImage(path);
         var bytes = Convert.FromBase64String(base64);
 
-        // 期望：截到最后一个 IEND 的 'D' 之后
-        var expectedLen = prefix.Length + "gamedata-".Length + "IEND".Length;
+        // 期望：截到最后一个 IEND 的 'D' 之后 + 4 字节 CRC（完整 PNG）
+        var expectedLen = prefix.Length + "gamedata-".Length + "IEND".Length + 4;
         Assert.Equal(expectedLen, bytes.Length);
     }
 
@@ -244,13 +322,13 @@ public class ScannerTests : IDisposable
     public void ParsePngData_ReturnsGameDataLen()
     {
         var prefix = TestAssets.PngPrefix();
-        var gameData = TestAssets.NameMarker("角色");
+        var gameData = TestAssets.BuildCharaDataRegion(new[] { "角色" }, Array.Empty<string>());
         var path = TestAssets.WritePng(_dir, "card.png", prefix, gameData);
 
         var result = _svc.ParsePngData(path);
 
-        // Go: gameData = data[iendIndex:]，包含 IEND 后的 4 字节 CRC
-        Assert.Equal(4 + gameData.Length, result.GameDataLen);
+        // GameDataLen = IEND 'D' 之后 + 4 字节 CRC 的追加数据长度（不含 CRC 本身）
+        Assert.Equal(gameData.Length, result.GameDataLen);
         Assert.Equal(new[] { "角色" }, result.CharaNames);
     }
 
@@ -259,8 +337,10 @@ public class ScannerTests : IDisposable
     [Fact]
     public async Task ReadPngModsBatch_SkipsLockedFiles()
     {
-        var good = TestAssets.WritePng(_dir, "good.png", TestAssets.PngPrefix(), TestAssets.ModMarker("com.mod.good"));
-        var locked = TestAssets.WritePng(_dir, "locked.png", TestAssets.PngPrefix(), TestAssets.ModMarker("com.mod.locked"));
+        var good = TestAssets.WritePng(_dir, "good.png", TestAssets.PngPrefix(),
+            TestAssets.BuildCharaDataRegion(Array.Empty<string>(), new[] { "com.mod.good" }));
+        var locked = TestAssets.WritePng(_dir, "locked.png", TestAssets.PngPrefix(),
+            TestAssets.BuildCharaDataRegion(Array.Empty<string>(), new[] { "com.mod.locked" }));
 
         var errors = new List<string>();
         using (var fs = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -276,8 +356,10 @@ public class ScannerTests : IDisposable
     [Fact]
     public async Task ReadPngPageDataBatch_SingleRead()
     {
-        var p1 = TestAssets.WritePng(_dir, "a.png", TestAssets.PngPrefix(), TestAssets.NameMarker("甲"));
-        var p2 = TestAssets.WritePng(_dir, "b.png", TestAssets.PngPrefix(), TestAssets.NameMarker("乙"));
+        var p1 = TestAssets.WritePng(_dir, "a.png", TestAssets.PngPrefix(),
+            TestAssets.BuildCharaDataRegion(new[] { "甲" }, Array.Empty<string>()));
+        var p2 = TestAssets.WritePng(_dir, "b.png", TestAssets.PngPrefix(),
+            TestAssets.BuildCharaDataRegion(new[] { "乙" }, Array.Empty<string>()));
 
         var results = await _svc.ReadPngPageDataBatchAsync(new[] { p1, p2 });
 

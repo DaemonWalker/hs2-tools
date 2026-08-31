@@ -8,6 +8,8 @@ namespace HS2Tools.Tests;
 /// <summary>
 /// 与 Go 版 scanner CLI 的输出对照（迁移文档阶段 1 验证策略）。
 /// 在临时目录复制 Go 源码构建基准 CLI（不修改原仓库）；构建失败则跳过。
+/// 注：卡片/场景解析已主动偏离 Go（结构化解析，基准 BepisPlugins），PNG 名称/Mod/缩略图
+/// 的 Go 对照已移除；此处仅保留 ScanDir / ZipMod 对照与真实卡片结构解析终验。
 /// </summary>
 public class GoComparisonTests : IDisposable
 {
@@ -145,47 +147,6 @@ public class GoComparisonTests : IDisposable
     // ==================== 对照测试 ====================
 
     [SkippableFact]
-    public void PngNames_MatchGo()
-    {
-        RequireGo();
-        var png = TestAssets.WritePng(_dir, "card.png",
-            TestAssets.PngPrefix(), TestAssets.NameMarker("测试角色"), TestAssets.NameMarker("第二个名字"));
-
-        var go = RunGo($"-action readPngNames -path \"{png}\"")
-            .EnumerateArray().Select(e => e.GetString()!).OrderBy(x => x).ToArray();
-        var cs = _svc.ReadPngNames(png).OrderBy(x => x).ToArray();
-
-        Assert.Equal(go, cs);
-    }
-
-    [SkippableFact]
-    public void PngMods_MatchGo()
-    {
-        RequireGo();
-        var png = TestAssets.WritePng(_dir, "card.png",
-            TestAssets.PngPrefix(), TestAssets.ModMarker("com.mod.a"), TestAssets.ModMarker("com.mod.b"));
-
-        var go = RunGo($"-action readPngMods -path \"{png}\"")
-            .EnumerateArray().Select(e => e.GetString()!).OrderBy(x => x).ToArray();
-        var cs = _svc.ReadPngMods(png).OrderBy(x => x).ToArray();
-
-        Assert.Equal(go, cs);
-    }
-
-    [SkippableFact]
-    public void PngImage_MatchGo()
-    {
-        RequireGo();
-        var png = TestAssets.WritePng(_dir, "card.png",
-            TestAssets.PngPrefix(), TestAssets.NameMarker("角色"), "tail-IEND-in-gamedata"u8.ToArray());
-
-        var go = RunGo($"-action readPngImage -path \"{png}\"").GetString();
-        var cs = _svc.ReadPngImage(png);
-
-        Assert.Equal(go, cs);
-    }
-
-    [SkippableFact]
     public void ZipMod_MatchGo()
     {
         RequireGo();
@@ -247,44 +208,63 @@ public class GoComparisonTests : IDisposable
             Assert.Equal(goIds, csMap[path]);
     }
 
-    // ==================== 阶段 4：真实卡片终验（乱码卡名） ====================
+    // ==================== 阶段 4：真实卡片结构解析终验 ====================
 
     /// <summary>
-    /// 真实卡片（含乱码名）对照：Go string(bytes) 保留无效 UTF-8 原始字节，
-    /// .NET 解码替换为 U+FFFD；但 Go 侧经 encoding/json 输出时同样替换为 U+FFFD，
-    /// 故两版在应用边界输出应逐一致。环境变量 HS2_REAL_CARD_DIRS（分号分隔目录）指向
-    /// 真实卡片目录时执行；同时统计含 U+FFFD 的卡数以确认乱码路径被真正覆盖。
+    /// 真实卡片结构解析终验：逐卡断言结构解析路径不抛异常，输出结构解析 vs 旧字节扫描
+    /// （仅数据区）的差异统计（差异预期存在——结构化解析有 KKEx 命名空间隔离、名字有序去重），
+    /// 断言宽松。环境变量 HS2_REAL_CARD_DIRS（分号分隔目录）指向真实卡片目录时执行。
     /// </summary>
     [SkippableFact]
-    public void RealCards_NamesAndMods_MatchGo()
+    public void RealCards_StructuralParse()
     {
-        RequireGo();
         var dirsEnv = Environment.GetEnvironmentVariable("HS2_REAL_CARD_DIRS");
         Skip.If(string.IsNullOrWhiteSpace(dirsEnv), "未设置 HS2_REAL_CARD_DIRS（真实卡片目录，分号分隔）");
 
         var files = 0;
-        var garbledFiles = 0;
+        var structuralOk = 0;
+        var nameDiff = 0;
+        var modDiff = 0;
         foreach (var dir in dirsEnv.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             foreach (var path in _svc.ScanDirectory(dir, new() { TargetExtension = { ".png" } }))
             {
                 files++;
-                var goNames = RunGo($"-action readPngNames -path \"{path}\"")
-                    .EnumerateArray().Select(e => e.GetString()!).OrderBy(x => x).ToArray();
-                var csNames = _svc.ReadPngNames(path).OrderBy(x => x).ToArray();
-                if (csNames.Any(n => n.Contains('�')))
-                    garbledFiles++;
-                Assert.Equal(goNames, csNames);
+                byte[] data;
+                try
+                {
+                    data = File.ReadAllBytes(path);
+                }
+                catch (Exception ex)
+                {
+                    ErrorLog.Log($"RealCards_StructuralParse read failed: {path}: {ex.Message}");
+                    continue;
+                }
 
-                var goMods = RunGo($"-action readPngMods -path \"{path}\"")
-                    .EnumerateArray().Select(e => e.GetString()!).OrderBy(x => x).ToArray();
-                var csMods = _svc.ReadPngMods(path).OrderBy(x => x).ToArray();
-                Assert.Equal(goMods, csMods);
+                var offset = ScannerService.GetDataRegionOffset(data);
+                if (offset < 0)
+                    continue;
+
+                // 结构解析不得向外抛异常（blob 失败应内部消化并记 ErrorLog）
+                var (names, modIds, ok) = CharaCardParser.ParseDataRegion(data.AsSpan(offset));
+                if (ok)
+                    structuralOk++;
+
+                // 与旧字节扫描（仅数据区）的差异统计
+                var region = data[offset..];
+                var legacyNames = ScannerService.SearchBuffer("fullname"u8.ToArray(), "personality"u8.ToArray(), region);
+                var legacyMods = ScannerService.SearchBuffer("ModID"u8.ToArray(), "Slot"u8.ToArray(), region);
+                if (!names.OrderBy(x => x).SequenceEqual(legacyNames.OrderBy(x => x)))
+                    nameDiff++;
+                if (!modIds.OrderBy(x => x).SequenceEqual(legacyMods.OrderBy(x => x)))
+                    modDiff++;
             }
         }
 
-        _output.WriteLine($"compared {files} cards; {garbledFiles} contain U+FFFD (garbled) names");
+        _output.WriteLine($"{files} cards: structural ok {structuralOk}, name diff {nameDiff}, mod diff {modDiff}");
         Assert.True(files > 0);
+        // 宽松断言：大多数卡应能结构解析成功
+        Assert.True(structuralOk > files / 2, $"structural hit rate too low: {structuralOk}/{files}");
     }
 
     [SkippableFact]
