@@ -32,6 +32,17 @@ public partial class ModsWindow : Window
         vm.DedupMessageRequested += (_, msg) =>
             MessageBox.Show(this, msg, "Mod 去重", MessageBoxButton.OK, MessageBoxImage.Information);
 
+        // 整理确认框（与去重同一交互模式）
+        vm.OrganizeConfirmationRequested += (_, msg) =>
+        {
+            var result = MessageBox.Show(this, msg,
+                "确认整理？", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result == MessageBoxResult.Yes)
+                _ = vm.ConfirmOrganizeAsync();
+        };
+        vm.OrganizeMessageRequested += (_, msg) =>
+            MessageBox.Show(this, msg, "整理 Mods", MessageBoxButton.OK, MessageBoxImage.Information);
+
         DataContext = vm;
     }
 }

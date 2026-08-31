@@ -55,6 +55,7 @@ public partial class ModsWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
     [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OrganizeCommand))]
     [NotifyPropertyChangedFor(nameof(RefreshButtonText))]
     [NotifyPropertyChangedFor(nameof(EmptyText))]
     private bool _isRefreshing;
@@ -62,12 +63,22 @@ public partial class ModsWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
     [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OrganizeCommand))]
     [NotifyPropertyChangedFor(nameof(DedupButtonText))]
     private bool _isDeduping;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
+    [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OrganizeCommand))]
+    [NotifyPropertyChangedFor(nameof(OrganizeButtonText))]
+    private bool _isOrganizing;
 
     public string RefreshButtonText => IsRefreshing ? "扫描中..." : "刷新模组列表";
 
     public string DedupButtonText => IsDeduping ? "去重中..." : "去重 Mods";
+
+    public string OrganizeButtonText => IsOrganizing ? "整理中..." : "整理 Mods";
 
     /// <summary>请求用户确认去重（View 订阅弹确认框，确认后调 <see cref="ConfirmDedupAsync"/>）</summary>
     public event EventHandler<string>? DedupConfirmationRequested;
@@ -75,10 +86,22 @@ public partial class ModsWindowViewModel : ObservableObject
     /// <summary>去重普通提示（无重复 / 完成汇总等，View 订阅弹 MessageBox）</summary>
     public event EventHandler<string>? DedupMessageRequested;
 
+    /// <summary>请求用户确认整理（View 订阅弹确认框，确认后调 <see cref="ConfirmOrganizeAsync"/>）</summary>
+    public event EventHandler<string>? OrganizeConfirmationRequested;
+
+    /// <summary>整理普通提示（无需整理 / 完成汇总等，View 订阅弹 MessageBox）</summary>
+    public event EventHandler<string>? OrganizeMessageRequested;
+
     // 去重待执行计划（确认后由 ConfirmDedupAsync 消费）
     private Dictionary<string, ModInfo>? _pendingWinners;
     private List<ModInfo>? _pendingLosers;
     private string? _pendingDupDir;
+
+    // 整理待执行计划（确认后由 ConfirmOrganizeAsync 消费）
+    private ModOrganizePlan? _pendingPlan;
+    private string? _pendingOrganizeDupDir;
+    private string? _pendingUnusedDir;
+    private string? _pendingSceneModsDir;
 
     public bool IsEmpty => Mods.Count == 0;
 
@@ -135,9 +158,11 @@ public partial class ModsWindowViewModel : ObservableObject
         }
     }
 
-    private bool CanRefresh() => !IsRefreshing && !IsDeduping;
+    private bool CanRefresh() => !IsRefreshing && !IsDeduping && !IsOrganizing;
 
-    private bool CanDedup() => !IsRefreshing && !IsDeduping;
+    private bool CanDedup() => !IsRefreshing && !IsDeduping && !IsOrganizing;
+
+    private bool CanOrganize() => !IsRefreshing && !IsDeduping && !IsOrganizing;
 
     /// <summary>
     /// 刷新（对应原版 scanMods）：ScanDirectory(.zipmod) + ReadZipModBatchAsync，
@@ -275,6 +300,168 @@ public partial class ModsWindowViewModel : ObservableObject
             IsDeduping = false;
         }
     }
+
+    /// <summary>
+    /// 整理（分析阶段）：重扫 mods 目录（排除下载目录与 mods/scenemods），实时分别扫描
+    /// 人物卡/场景卡 PNG 引用（现有 ModUsage 缓存是两卡合并口径，区分不了"仅场景"），
+    /// 先按去重规则裁决同 GUID 重复，再按引用分类；有活可干则暂存计划并请求确认。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOrganize))]
+    private async Task OrganizeAsync()
+    {
+        IsOrganizing = true;
+        try
+        {
+            var modsDir = _config.GetModsDir();
+            var gamePath = _config.Settings.Current.GamePath;
+            if (modsDir is null || string.IsNullOrEmpty(gamePath))
+            {
+                OrganizeMessageRequested?.Invoke(this, "请先设置游戏目录");
+                return;
+            }
+
+            // 下载目录与 mods/scenemods（整理目标目录）内的文件不参与整理
+            var downloadDir = _config.GetModDownloadDir();
+            var sceneModsDir = Path.Combine(modsDir, "scenemods");
+            var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } })
+                .Where(f => !IsUnderDir(f, downloadDir) && !IsUnderDir(f, sceneModsDir))
+                .ToList();
+            var entries = await _scanner.ReadZipModBatchListAsync(files, onError: LogScanError);
+
+            var charaUsage = await ScanPngUsageSetAsync(_config.GetCharaDir());
+            var sceneUsage = await ScanPngUsageSetAsync(_config.GetSceneDir());
+
+            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage);
+            if (plan.Duplicates.Count == 0 && plan.Unused.Count == 0 && plan.SceneOnly.Count == 0)
+            {
+                OrganizeMessageRequested?.Invoke(this, "Mods 无需整理");
+                return;
+            }
+
+            _pendingPlan = plan;
+            _pendingOrganizeDupDir = Path.Combine(gamePath, "duplicatemods");
+            _pendingUnusedDir = Path.Combine(gamePath, "unusedmods");
+            _pendingSceneModsDir = sceneModsDir;
+            OrganizeConfirmationRequested?.Invoke(this,
+                $"整理 Mods 将把：{plan.Duplicates.Count} 个重复落选文件（{plan.DupGroups} 组，保留规则：版本高 → 体积大 → 日期新）" +
+                $"移动到 duplicatemods，{plan.Unused.Count} 个未使用 Mods 移动到 unusedmods，" +
+                $"{plan.SceneOnly.Count} 个仅场景引用的 Mods 移动到 mods\\scenemods。是否继续？");
+        }
+        finally
+        {
+            IsOrganizing = false;
+        }
+    }
+
+    /// <summary>整理（执行阶段）：三类文件分别移入目标目录，LocalMods 同步写回</summary>
+    public async Task ConfirmOrganizeAsync()
+    {
+        if (_pendingPlan is not { } plan || _pendingOrganizeDupDir is not { } dupDir ||
+            _pendingUnusedDir is not { } unusedDir || _pendingSceneModsDir is not { } sceneModsDir)
+            return;
+        _pendingPlan = null;
+        _pendingOrganizeDupDir = null;
+        _pendingUnusedDir = null;
+        _pendingSceneModsDir = null;
+
+        IsOrganizing = true;
+        var (dupMoved, unusedMoved, sceneMoved, failed) = (0, 0, 0, 0);
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var dup in plan.Duplicates)
+                {
+                    if (TryOrganizeMove(dup, dupDir) is not null)
+                        dupMoved++;
+                    else
+                        failed++;
+                }
+                foreach (var mod in plan.Unused)
+                {
+                    if (TryOrganizeMove(mod, unusedDir) is not null)
+                        unusedMoved++;
+                    else
+                        failed++;
+                }
+                foreach (var mod in plan.SceneOnly)
+                {
+                    // 移动成功直接改写 Path（与 plan.Winners 同一引用），供 LocalMods 写回
+                    if (TryOrganizeMove(mod, sceneModsDir) is { } newPath)
+                    {
+                        mod.Path = newPath;
+                        sceneMoved++;
+                    }
+                    else
+                    {
+                        failed++;
+                    }
+                }
+            });
+
+            // LocalMods 写回：未动赢家保留、SceneOnly 的 Path 已更新、Unused 移除（移出 mods 目录不再是本地 mod）
+            var unusedSet = new HashSet<ModInfo>(plan.Unused);
+            _config.Update(s =>
+            {
+                var mods = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (guid, info) in plan.Winners)
+                {
+                    if (!unusedSet.Contains(info))
+                        mods[guid] = info;
+                }
+                s.Current.LocalMods = mods;
+            });
+
+            var summary = $"整理完成：去重 {dupMoved}、未使用 {unusedMoved}、场景专用 {sceneMoved}";
+            if (failed > 0)
+                summary += $"（{failed} 个失败）";
+            OrganizeMessageRequested?.Invoke(this, summary);
+        }
+        finally
+        {
+            IsOrganizing = false;
+        }
+    }
+
+    /// <summary>逐文件移动（防重名），失败记日志返回 null 不中断</summary>
+    private string? TryOrganizeMove(ModInfo mod, string targetDir)
+    {
+        try
+        {
+            var target = UniqueTargetPath(targetDir, mod.Path);
+            _scanner.MoveFile(mod.Path, target);
+            return target;
+        }
+        catch (Exception ex)
+        {
+            App.LogException(new Exception($"Organize move failed: {mod.Path}: {ex.Message}"));
+            return null;
+        }
+    }
+
+    /// <summary>扫描 PNG 目录汇成引用 GUID 集合（分批同 MainWindowViewModel，目录不存在视为空）</summary>
+    private async Task<HashSet<string>> ScanPngUsageSetAsync(string? dir)
+    {
+        var usage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (dir is null || !Directory.Exists(dir))
+            return usage;
+
+        const int batchSize = 500;
+        var files = _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".png" } });
+        for (var i = 0; i < files.Count; i += batchSize)
+        {
+            var batch = files.GetRange(i, Math.Min(batchSize, files.Count - i));
+            var results = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
+            foreach (var item in results)
+                foreach (var modId in item.ModIDs)
+                    usage.Add(modId);
+        }
+        return usage;
+    }
+
+    /// <summary>路径是否位于指定目录内（前缀匹配，大小写不敏感）</summary>
+    private static bool IsUnderDir(string path, string? dir) =>
+        dir is not null && path.StartsWith(dir, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>duplicatemods 内的目标路径：同名已存在时追加 _2、_3 后缀</summary>
     private static string UniqueTargetPath(string dir, string srcPath)
