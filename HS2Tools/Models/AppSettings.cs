@@ -51,9 +51,6 @@ public class GameData
     /// <summary>场景卡引用统计（guid -> count）</summary>
     public Dictionary<string, int> SceneUsage { get; set; } = new();
 
-    /// <summary>分析时卡片 KKEx 命中的 shader 名（整理时 shader 包豁免依据）</summary>
-    public List<string> UsedShaderNames { get; set; } = new();
-
     /// <summary>最近一次「开始分析」完成时间（去重/整理确认文案标注缓存时点；null = 从未分析）</summary>
     public DateTime? LastAnalysisTime { get; set; }
 }

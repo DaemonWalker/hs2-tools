@@ -1,30 +1,39 @@
 using System.Windows;
+using System.Windows.Controls;
 using HS2Tools.ViewModels;
 
 namespace HS2Tools.Views;
 
-/// <summary>主窗口：首页 + 导航（常驻，真正关闭时退出应用）</summary>
+/// <summary>应用主壳：全局游戏切换、左侧导航与单页面内容宿主。</summary>
 public partial class MainWindow : Window
 {
+    private bool _initialized;
+
     public MainWindow()
     {
         InitializeComponent();
-        // 在句柄创建时挂接 ViewModel（只触发一次）；
-        // 测试在无 Application 环境下实例化窗口时不走此路径
-        SourceInitialized += (_, _) => InitViewModel();
+        SourceInitialized += (_, _) => InitShell();
     }
 
-    private void InitViewModel()
+    private void InitShell()
     {
-        if (DataContext is MainWindowViewModel)
+        if (_initialized || App.Services is not { } services)
             return;
-        if (App.Services is not { } s)
-            return; // 测试环境（无 Application）
+        _initialized = true;
 
         var vm = new MainWindowViewModel(
-            s.Config, s.Scanner, s.Downloads, s.GameLauncher, s.SideloadDb, s.CreateSideloader);
+            services.Config, services.Scanner, services.Downloads,
+            services.GameLauncher, services.SideloadDb, services.CreateSideloader);
+        DataContext = vm;
+        SubscribeConfirmations(vm);
 
-        // 停止爬虫确认框（原版 Modal.confirm 语义）
+        services.Pages.Navigated += (_, _) => PageHost.Content = services.Pages.CurrentPage;
+        NavHome.IsChecked = true;
+        services.Pages.Show<HomeView>();
+    }
+
+    private void SubscribeConfirmations(MainWindowViewModel vm)
+    {
         vm.StopConfirmationRequested += (_, _) =>
         {
             var result = MessageBox.Show(this,
@@ -34,7 +43,6 @@ public partial class MainWindow : Window
                 vm.ConfirmStopSideloader();
         };
 
-        // unusedmods 移回确认框（数据分析完成后，与整理功能的确认口径一致）
         vm.MoveBackConfirmationRequested += async (_, msg) =>
         {
             var result = MessageBox.Show(this, msg,
@@ -46,15 +54,16 @@ public partial class MainWindow : Window
                 failed > 0 ? $"已移回 {moved} 个，失败 {failed} 个（详见 error.log）" : $"已移回 {moved} 个",
                 "移回完成", MessageBoxButton.OK, MessageBoxImage.Information);
         };
-
-        DataContext = vm;
     }
 
-    private void NavChara_Click(object sender, RoutedEventArgs e) => App.Services.Windows.Show<CharaWindow>();
-    private void NavScene_Click(object sender, RoutedEventArgs e) => App.Services.Windows.Show<SceneWindow>();
-    private void NavCardExplorer_Click(object sender, RoutedEventArgs e) => App.Services.Windows.Show<CardExplorerWindow>();
-    private void NavMods_Click(object sender, RoutedEventArgs e) => App.Services.Windows.Show<ModsWindow>();
-    private void NavSideload_Click(object sender, RoutedEventArgs e) => App.Services.Windows.Show<SideloadWindow>();
-    private void NavDownload_Click(object sender, RoutedEventArgs e) => App.Services.Windows.Show<DownloadWindow>();
-    private void NavSettings_Click(object sender, RoutedEventArgs e) => App.Services.Windows.Show<SettingsWindow>();
+    private static void Navigate<T>() where T : UserControl => App.Services.Pages.Show<T>();
+
+    private void NavHome_Click(object sender, RoutedEventArgs e) => Navigate<HomeView>();
+    private void NavChara_Click(object sender, RoutedEventArgs e) => Navigate<CharaView>();
+    private void NavScene_Click(object sender, RoutedEventArgs e) => Navigate<SceneView>();
+    private void NavCardExplorer_Click(object sender, RoutedEventArgs e) => Navigate<CardExplorerView>();
+    private void NavMods_Click(object sender, RoutedEventArgs e) => Navigate<ModsView>();
+    private void NavSideload_Click(object sender, RoutedEventArgs e) => Navigate<SideloadView>();
+    private void NavDownload_Click(object sender, RoutedEventArgs e) => Navigate<DownloadView>();
+    private void NavSettings_Click(object sender, RoutedEventArgs e) => Navigate<SettingsView>();
 }

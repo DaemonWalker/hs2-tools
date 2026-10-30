@@ -173,6 +173,7 @@ public partial class CardGridControl : UserControl
             }
         }
 
+        var isFirstLoad = _scroller is null;
         if (_scroller is null)
         {
             GridItems.ApplyTemplate();
@@ -181,7 +182,8 @@ public partial class CardGridControl : UserControl
                 _scroller.ScrollChanged += OnScrollChanged;
         }
 
-        ApplyFilterSortAndReset();
+        if (isFirstLoad)
+            ApplyFilterSortAndReset();
     }
 
     /// <summary>刷新（对应原版 CardGridRef.reload：清空已加载并重新过滤/排序/分批解析）</summary>

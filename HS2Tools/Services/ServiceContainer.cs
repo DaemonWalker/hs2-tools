@@ -3,8 +3,8 @@ using HS2Tools.Windows;
 namespace HS2Tools.Services;
 
 /// <summary>
-/// 服务容器（迁移方案 §4：状态全部下沉到服务层单例，Window 只是视图）。
-/// App 启动时创建全部服务单例，窗口/ViewModel 通过它取用。
+/// 服务容器：状态全部下沉到服务层单例，View 只负责展示与绑定。
+/// App 启动时创建全部服务单例，页面/ViewModel 通过它取用。
 /// </summary>
 public class ServiceContainer : IDisposable
 {
@@ -15,7 +15,7 @@ public class ServiceContainer : IDisposable
         Downloads = new DownloadManager(Config.GetProxyString);
         GameLauncher = new GameLauncherService(Config);
         SideloadDb = new SideloadDatabaseService(Config);
-        Windows = new WindowManager();
+        Pages = new PageManager();
     }
 
     public ConfigService Config { get; }
@@ -23,7 +23,7 @@ public class ServiceContainer : IDisposable
     public DownloadManager Downloads { get; }
     public GameLauncherService GameLauncher { get; }
     public SideloadDatabaseService SideloadDb { get; }
-    public WindowManager Windows { get; }
+    public PageManager Pages { get; }
 
     /// <summary>
     /// 每次运行爬虫创建新实例（对应原版 RunSideloader 时 NewSideloader(proxy)），

@@ -1,0 +1,13 @@
+{
+  "name": "update-document",
+  "version": "1.0.0",
+  "description": "自动维护文档链接一致性，在文档结构变化时更新交叉引用",
+  "main": "scripts/update-links.js",
+  "scripts": {
+    "check": "node scripts/update-links.js check",
+    "fix": "node scripts/update-links.js fix"
+  },
+  "dependencies": {
+    "glob": "^10.0.0"
+  }
+}

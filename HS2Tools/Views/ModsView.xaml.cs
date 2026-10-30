@@ -1,15 +1,16 @@
 using System.Windows;
+using System.Windows.Controls;
 using HS2Tools.ViewModels;
 
 namespace HS2Tools.Views;
 
-/// <summary>本地模组窗口：统计三卡 + 筛选 + DataGrid + 刷新重扫</summary>
-public partial class ModsWindow : Window
+/// <summary>本地模组页：统计 + 筛选 + DataGrid + 维护操作</summary>
+public partial class ModsView : UserControl
 {
-    public ModsWindow()
+    public ModsView()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => InitViewModel();
+        Loaded += (_, _) => InitViewModel();
     }
 
     private void InitViewModel()
@@ -17,31 +18,30 @@ public partial class ModsWindow : Window
         if (DataContext is ModsWindowViewModel)
             return;
         if (App.Services is not { } s)
-            return; // 测试环境（无 Application）
+            return;
 
         var vm = new ModsWindowViewModel(s.Config, s.Scanner, s.SideloadDb);
+        var owner = Window.GetWindow(this);
 
-        // 去重确认框（仿主窗口停止爬虫确认模式）
         vm.DedupConfirmationRequested += (_, msg) =>
         {
-            var result = MessageBox.Show(this, msg,
+            var result = MessageBox.Show(owner, msg,
                 "确认去重？", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result == MessageBoxResult.Yes)
                 _ = vm.ConfirmDedupAsync();
         };
         vm.DedupMessageRequested += (_, msg) =>
-            MessageBox.Show(this, msg, "Mod 去重", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(owner, msg, "Mod 去重", MessageBoxButton.OK, MessageBoxImage.Information);
 
-        // 整理确认框（与去重同一交互模式）
         vm.OrganizeConfirmationRequested += (_, msg) =>
         {
-            var result = MessageBox.Show(this, msg,
+            var result = MessageBox.Show(owner, msg,
                 "确认整理？", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result == MessageBoxResult.Yes)
                 _ = vm.ConfirmOrganizeAsync();
         };
         vm.OrganizeMessageRequested += (_, msg) =>
-            MessageBox.Show(this, msg, "整理 Mods", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(owner, msg, "整理 Mods", MessageBoxButton.OK, MessageBoxImage.Information);
 
         DataContext = vm;
     }

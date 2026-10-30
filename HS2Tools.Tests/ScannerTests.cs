@@ -212,6 +212,18 @@ public class ScannerTests : IDisposable
     }
 
     [Fact]
+    public void ReadPngMods_NormalizesUnicodeAndWhitespace()
+    {
+        var path = TestAssets.WritePng(_dir, "card.png",
+            TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(Array.Empty<string>(),
+                new[] { " \t[Ω-G16] HS2-KK Set\r\n", "Blue Archive ", "七色的人偶.夜々" }));
+        var expected = new[] { "[Ω-G16] HS2-KK Set", "Blue Archive", "七色的人偶.夜々" };
+
+        Assert.Equal(expected, _svc.ReadPngMods(path));
+        Assert.Equal(expected, _svc.ParsePngData(path).ModIDs);
+    }
+
+    [Fact]
     public void ReadPngMods_KkexNamespaceIsolation()
     {
         // 其他插件数据里含同名 "ModID" 键：不得误报（KKEx 插件 ID 命名空间隔离）
@@ -233,56 +245,6 @@ public class ScannerTests : IDisposable
     }
 
     [Fact]
-    public void ReadPngModsAndShaders_MatchesOnlyUsedShaderNames()
-    {
-        // KK 卡 KKEx 内 ME 插件数据含 "xukmi/SkinPlus"：候选中命中它，未出现的 "xukmi/FX" 不命中；
-        // GUID 提取不受影响
-        var path = TestAssets.WritePng(_dir, "card.png",
-            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegionWithShaders(
-                "白峰", "一乃", new[] { "com.kk.mod" }, new[] { "xukmi/SkinPlus" }));
-        var candidates = new List<KeyValuePair<string, byte[]>>
-        {
-            new("xukmi/SkinPlus", "xukmi/SkinPlus"u8.ToArray()),
-            new("xukmi/FX", "xukmi/FX"u8.ToArray()),
-        };
-
-        var result = _svc.ReadPngModsAndShaders(path, candidates);
-
-        Assert.Equal(new[] { "com.kk.mod" }, result.ModIDs);
-        Assert.Equal(new[] { "xukmi/SkinPlus" }, result.ShaderNames);
-    }
-
-    [Fact]
-    public void ReadPngModsAndShaders_EmptyCandidates_DegeneratesToModsOnly()
-    {
-        var path = TestAssets.WritePng(_dir, "card.png",
-            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegionWithShaders(
-                "白峰", "一乃", new[] { "com.kk.mod" }, new[] { "xukmi/SkinPlus" }));
-
-        var result = _svc.ReadPngModsAndShaders(path, new List<KeyValuePair<string, byte[]>>());
-
-        Assert.Equal(new[] { "com.kk.mod" }, result.ModIDs);
-        Assert.Empty(result.ShaderNames);
-    }
-
-    [Fact]
-    public void ReadPngModsAndShaders_FallbackScansWholeDataRegion()
-    {
-        // 结构化解析失败（无卡头标记的裸字节区）→ 回退扫整个数据区，shader 名仍能命中
-        var path = TestAssets.WritePng(_dir, "card.png",
-            TestAssets.PngPrefix(), "garbage-xukmi/SkinPlus-garbage"u8.ToArray());
-        var candidates = new List<KeyValuePair<string, byte[]>>
-        {
-            new("xukmi/SkinPlus", "xukmi/SkinPlus"u8.ToArray()),
-        };
-
-        var result = _svc.ReadPngModsAndShaders(path, candidates);
-
-        Assert.Empty(result.ModIDs);
-        Assert.Equal(new[] { "xukmi/SkinPlus" }, result.ShaderNames);
-    }
-
-    [Fact]
     public void ParsePngData_Scene_TwoCharaBlobsAndTrailer()
     {
         // 场景：两个内嵌 chara blob + KKEx trailer
@@ -291,6 +253,33 @@ public class ScannerTests : IDisposable
         var result = _svc.ParsePngData(path);
         Assert.Equal(new[] { "角色甲", "角色乙" }, result.CharaNames);
         Assert.Equal(new[] { "com.mod.scene" }, result.ModIDs);
+    }
+
+    [Fact]
+    public void ParsePngData_StudioScene_TrailerItemInfoAndPatternInfo()
+    {
+        // 工作室场景 trailer 的 UAR 数据用 itemInfo/patternInfo 键（真实 KK 场景卡实测），
+        // 不是角色卡的 "info" —— 漏读会导致场景级 mod（如 satoru_mod_bs）全部丢失
+        var path = TestAssets.WritePng(_dir, "studio_scene.png",
+            TestAssets.PngPrefix(),
+            TestAssets.BuildStudioSceneDataRegion("角色丙", new[] { "com.mod.item" }, new[] { "com.mod.pattern" }));
+        var result = _svc.ParsePngData(path);
+        Assert.Equal(new[] { "角色丙" }, result.CharaNames);
+        Assert.Equal(new[] { "com.mod.item", "com.mod.pattern" }, result.ModIDs);
+    }
+
+    [Fact]
+    public void ParsePngData_StudioScene_TrailerMapInfoGuid()
+    {
+        // 地图 mod 的 GUID 直接以字符串形式挂在 UAR data map 的 mapInfoGUID 键上
+        //（真实场景卡实测，如 DS27.ProjectDiva_H_Maps_Collection）
+        var path = TestAssets.WritePng(_dir, "studio_scene_map.png",
+            TestAssets.PngPrefix(),
+            TestAssets.BuildStudioSceneDataRegion("角色丁", new[] { "com.mod.item" }, new[] { "com.mod.pattern" },
+                mapInfoGuid: "DS27.ProjectDiva_H_Maps_Collection"));
+        var result = _svc.ParsePngData(path);
+        Assert.Equal(new[] { "角色丁" }, result.CharaNames);
+        Assert.Equal(new[] { "com.mod.item", "com.mod.pattern", "DS27.ProjectDiva_H_Maps_Collection" }, result.ModIDs);
     }
 
     // ==================== PNG 读取（回退路径） ====================

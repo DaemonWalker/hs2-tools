@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find docs:*)",
+      "Bash(mv 01-项目介绍.md 项目介绍.md)",
+      "Bash(mv 02-快速开始 快速开始)",
+      "Bash(mv 03-架构设计 架构设计)",
+      "Bash(mv 04-功能模块 功能模块)",
+      "Bash(mv 05-Go工具 Go工具)",
+      "Bash(:false,)",
+      "Bash(:workspacehs2-toolssrcrenderersrccomponentsshare)",
+      "Bash(:/src/renderer/src/components/share)",
+      "Bash(:/src/renderer/src/components/)",
+      "Bash(:/src/renderer/src/components)",
+      "Bash(:workspacehs2-toolssrcrenderersrccomponents)"
+    ]
+  }
+}

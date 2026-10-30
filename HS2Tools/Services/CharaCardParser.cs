@@ -70,11 +70,9 @@ internal static class CharaCardParser
     /// 单卡 1 个 blob、场景 N 个内嵌 blob，统一处理；末尾再尝试 KKEx trailer。
     /// 名字/ModID 按出现顺序去重；单个 blob 失败记 ErrorLog 并继续；
     /// 全部 blob 失败或无标记 → StructuralOk=false（调用方走回退路径）。
-    /// kkexBlobs 非 null 时顺带收集 KKEx 原始字节（块 + trailer 的 msgpack map 部分，
-    /// 供调用方做 Material Editor shader 名等内容级子串匹配，解析器本身不感知 shader）。
     /// </summary>
     public static (List<string> Names, List<string> ModIDs, bool StructuralOk) ParseDataRegion(
-        ReadOnlySpan<byte> region, List<byte[]>? kkexBlobs = null)
+        ReadOnlySpan<byte> region)
     {
         var names = new List<string>();
         var modIds = new List<string>();
@@ -86,7 +84,7 @@ internal static class CharaCardParser
             blobFound++;
             try
             {
-                ParseCharaBlob(region, pos, marker, format, names, modIds, kkexBlobs);
+                ParseCharaBlob(region, pos, marker, format, names, modIds);
                 blobOk++;
             }
             catch (Exception ex)
@@ -98,7 +96,7 @@ internal static class CharaCardParser
         // 场景/坐标卡级扩展数据 trailer（解析失败不视为整体失败）
         try
         {
-            foreach (var id in ParseKkexTrailer(region, kkexBlobs))
+            foreach (var id in ParseKkexTrailer(region))
                 AddDistinct(modIds, id);
         }
         catch (Exception ex)
@@ -141,7 +139,7 @@ internal static class CharaCardParser
     // ==================== ChaFile blob ====================
 
     private static void ParseCharaBlob(ReadOnlySpan<byte> region, int markerPos, byte[] marker, CardFormat format,
-        List<string> names, List<string> modIds, List<byte[]>? kkexBlobs = null)
+        List<string> names, List<string> modIds)
     {
         // blob 起点 = 标记前 1 字节 7bit 长度前缀 + 前 4 字节 int32 loadProductNo
         if (markerPos < 5)
@@ -192,8 +190,6 @@ internal static class CharaCardParser
 
             if (info.Name == "KKEx")
             {
-                // 结构化解析前保留原始字节（Material Editor shader 名等按内容子串匹配用）
-                kkexBlobs?.Add(region.Slice(blocksStart + (int)info.Pos, (int)info.Size).ToArray());
                 foreach (var id in ExtractUarModIds(seq))
                     AddDistinct(modIds, id);
             }
@@ -289,8 +285,10 @@ internal static class CharaCardParser
 
     /// <summary>
     /// KKEx msgpack：map&lt;插件ID, [version:int, data:map]&gt;。
-    /// 只取 UAR 插件（新/旧 ID）：data["info"] = array of bin，每个 bin 是一条 ResolveInfo
-    /// 的 msgpack map（字符串键），取 "ModID" 的字符串值。
+    /// 只取 UAR 插件（新/旧 ID）：角色/坐标卡 data["info"]，场景 data["itemInfo"]/data["patternInfo"]
+    /// （基准 Sideloader UAR：角色用 "info"，工作室场景物件用 "itemInfo"、图案用 "patternInfo"，真实场景卡实测），
+    /// 值为 array of bin，每个 bin 是一条 ResolveInfo 的 msgpack map（字符串键），取 "ModID" 的字符串值。
+    /// 场景地图 mod 的 GUID 直接挂在 data["mapInfoGUID"] 字符串值上（真实场景卡实测）。
     /// </summary>
     private static List<string> ExtractUarModIds(ReadOnlySequence<byte> seq)
     {
@@ -325,7 +323,16 @@ internal static class CharaCardParser
         for (var i = 0; i < mapCount; i++)
         {
             var key = reader.ReadString();
-            if (key != "info" || reader.NextMessagePackType != MessagePackType.Array)
+            // 地图 mod 的 GUID 直接以字符串形式挂在 UAR data map 上（真实场景卡实测）
+            if (key == "mapInfoGUID" && reader.NextMessagePackType == MessagePackType.String)
+            {
+                var guid = reader.ReadString();
+                if (!string.IsNullOrEmpty(guid))
+                    AddDistinct(result, guid);
+                continue;
+            }
+            // "info" = 角色/坐标卡；"itemInfo"/"patternInfo" = 工作室场景物件/图案（真实场景卡实测）
+            if (key is not ("info" or "itemInfo" or "patternInfo") || reader.NextMessagePackType != MessagePackType.Array)
             {
                 reader.Skip();
                 continue;
@@ -377,7 +384,7 @@ internal static class CharaCardParser
     /// 在数据区内暴力扫描 "KKEx" 字节出现处（参考实现的场景导入同样扫字节），
     /// 校验 7bit 前缀、version 合理、length 终点与数据区末尾吻合才算命中。
     /// </summary>
-    private static List<string> ParseKkexTrailer(ReadOnlySpan<byte> region, List<byte[]>? kkexBlobs = null)
+    private static List<string> ParseKkexTrailer(ReadOnlySpan<byte> region)
     {
         var result = new List<string>();
         var pos = 0;
@@ -405,7 +412,6 @@ internal static class CharaCardParser
                 continue;
 
             var seq = new ReadOnlySequence<byte>(region.Slice(p, length).ToArray());
-            kkexBlobs?.Add(region.Slice(p, length).ToArray());
             foreach (var id in ExtractUarModIds(seq))
                 AddDistinct(result, id);
             break; // 命中合法 trailer 即停

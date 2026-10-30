@@ -1,0 +1,98 @@
+<UserControl x:Class="HS2Tools.Views.SideloadView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="28,26,28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <StackPanel>
+                <TextBlock Text="Sideload 数据库" Style="{StaticResource PageTitle}"/>
+                <TextBlock Text="检索 BetterRepack 模组索引并下载缺失依赖" Style="{StaticResource PageSubtitle}"/>
+            </StackPanel>
+            <TextBlock Text="{Binding LastScanText}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"
+                       Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+        </Grid>
+
+        <UniformGrid Grid.Row="1" Columns="3" Margin="0,20,0,16">
+            <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                <StackPanel>
+                    <TextBlock Text="数据库总数" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding TotalCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource AccentBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                <StackPanel>
+                    <TextBlock Text="已存在" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding ExistingCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource SuccessBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}">
+                <StackPanel>
+                    <TextBlock Text="缺失" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding MissingCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource ErrorBrush}"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,16" Padding="12">
+            <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                     Tag="搜索 GUID 或下载地址"/>
+        </Border>
+
+        <Grid Grid.Row="3">
+            <DataGrid ItemsSource="{Binding Items}"
+                      AutoGenerateColumns="False" IsReadOnly="True"
+                      EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                      GridLinesVisibility="Horizontal" HeadersVisibility="Column">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="GUID" Binding="{Binding Guid}" Width="3*" SortMemberPath="Guid"/>
+                    <DataGridTextColumn Header="下载地址" Binding="{Binding Url}" Width="2*" SortMemberPath="Url"/>
+                    <DataGridTemplateColumn Header="状态" Width="100" SortMemberPath="ExistsLocally">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{DynamicResource ErrorBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ExistsLocally}" Value="True"><Setter Property="Foreground" Value="{DynamicResource SuccessBrush}"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding IsCompleted}" Value="True"><Setter Property="Foreground" Value="{DynamicResource SuccessBrush}"/></DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="操作" Width="110" CanUserSort="False">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button Content="{Binding DownloadText}" Width="84" MinHeight="30" Padding="6,4"
+                                        IsEnabled="{Binding CanDownload}"
+                                        Command="{Binding DataContext.DownloadCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                        CommandParameter="{Binding}"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+            <TextBlock Text="{Binding EmptyText}" FontSize="14" TextWrapping="Wrap"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40,0"
+                       Foreground="{DynamicResource SecondaryForegroundBrush}"
+                       Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}"/>
+        </Grid>
+
+        <TextBlock Grid.Row="4" Margin="0,12,0,0" FontSize="12" TextWrapping="Wrap"
+                   Foreground="{DynamicResource SecondaryForegroundBrush}"
+                   Text="数据来源于 sideload.betterrepack.com，用于自动补全角色和场景所需的缺失 Mods。"/>
+    </Grid>
+</UserControl>

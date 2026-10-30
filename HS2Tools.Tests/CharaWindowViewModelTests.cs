@@ -220,4 +220,43 @@ public class CharaWindowViewModelTests : IDisposable
         }
         Assert.True(item.ShowCompleted);
     }
+
+    [Fact]
+    public void ConfigChanged_InvalidGamePath_ClearsCardsAndShowsError()
+    {
+        var hs2Dir = MakeGameDir();
+        TestAssets.WritePng(Path.Combine(hs2Dir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("张三"));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => { s.CurrentGame = "hs2"; s.Current.GamePath = hs2Dir; });
+        config.Update(s => { s.CurrentGame = "kk"; s.Current.GamePath = hs2Dir; });
+        config.Update(s => s.CurrentGame = "hs2");
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.LoadCardPaths();
+        Assert.Single(vm.AllPaths);
+
+        config.Update(s => s.CurrentGame = "kk");
+
+        Assert.Empty(vm.AllPaths);
+        Assert.Contains(GameProfiles.Kk.GameExeName, vm.EmptyText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ConfigChanged_GamePathFix_RescansCurrentGame()
+    {
+        var gameDir = MakeGameDir();
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("张三"));
+
+        using var config = new ConfigService(_dir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.LoadCardPaths();
+        Assert.Empty(vm.AllPaths);
+
+        config.Update(s => s.Current.GamePath = gameDir);
+
+        Assert.Single(vm.AllPaths);
+        Assert.EndsWith("c1.png", vm.AllPaths[0], StringComparison.OrdinalIgnoreCase);
+    }
 }

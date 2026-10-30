@@ -1,15 +1,16 @@
 using System.Windows;
+using System.Windows.Controls;
 using HS2Tools.ViewModels;
 
 namespace HS2Tools.Views;
 
-/// <summary>角色卡浏览窗口：网格 + 搜索 + 排序 + 详情面板</summary>
-public partial class CharaWindow : Window
+/// <summary>角色卡浏览页：网格 + 搜索 + 排序 + 详情面板</summary>
+public partial class CharaView : UserControl
 {
-    public CharaWindow()
+    public CharaView()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => InitViewModel();
+        Loaded += (_, _) => InitViewModel();
     }
 
     private void InitViewModel()
@@ -17,16 +18,16 @@ public partial class CharaWindow : Window
         if (DataContext is CharaWindowViewModel)
             return;
         if (App.Services is not { } s)
-            return; // 测试环境（无 Application）
+            return;
 
         var vm = new CharaWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher);
         DataContext = vm;
-        vm.LoadCardPaths(); // 对应原版挂载时 getAllFiles
+        vm.LoadCardPaths();
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is CharaWindowViewModel vm)
-            vm.LoadCardPaths(); // ItemsSource 变化 → 控件内部重置重新加载
+            vm.LoadCardPaths();
     }
 }

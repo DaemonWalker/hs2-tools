@@ -378,7 +378,7 @@ public class MainWindowViewModelTests : IDisposable
     [Fact]
     public async Task Scan_PersistsOrganizeCache()
     {
-        // 去重/整理的数据源缓存：完整条目（含重复 guid、覆盖 unusedmods）、分卡引用、shader 命中、时点
+        // 去重/整理的数据源缓存：完整条目（含重复 guid、覆盖 unusedmods）、分卡引用、时点
         var gameDir = MakeGameDir();
         var modsDir = Path.Combine(gameDir, "mods");
         var unusedDir = Path.Combine(gameDir, "unusedmods");
@@ -394,7 +394,7 @@ public class MainWindowViewModelTests : IDisposable
         TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative), "s1.png",
             TestAssets.PngPrefix(), TestAssets.ModMarker("g-a"));
         TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
-            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegionWithShaders("白峰", "一乃", ["g-u"], ["xukmi/SkinPlus"]));
+            TestAssets.PngPrefix(), TestAssets.BuildKkCharaDataRegion("白峰", "一乃", ["g-u"]));
 
         using var config = new ConfigService(_dir);
         var vm = MakeVm(config, new SideloadDatabaseService(config));
@@ -405,10 +405,12 @@ public class MainWindowViewModelTests : IDisposable
         Assert.Equal(4, data.ModEntries.Count); // 完整条目不折叠重复：a_v1/a_v2/shader + unusedmods 的 u
         Assert.Equal(2, data.ModEntries.Count(e => e.Guid == "g-a"));
         Assert.Contains(data.ModEntries, e => e.Guid == "g-u");
+        // shader 包的 manifest 声明随条目缓存持久化（整理豁免依据）
+        Assert.Equal(["xukmi/SkinPlus", "xukmi/FX"],
+            data.ModEntries.Single(e => e.Guid == "g-shader").Info.ShaderNames);
         Assert.Equal(1, data.SceneUsage["g-a"]);
         Assert.False(data.CharaUsage.ContainsKey("g-a")); // 分卡口径：g-a 仅场景引用
         Assert.Equal(1, data.CharaUsage["g-u"]);
-        Assert.Equal(["xukmi/SkinPlus"], data.UsedShaderNames); // 只收录卡片命中的 shader 名
         Assert.NotNull(data.LastAnalysisTime);
     }
 
@@ -470,6 +472,42 @@ public class MainWindowViewModelTests : IDisposable
         // 未引用与同 GUID 重复的原地不动
         Assert.True(File.Exists(Path.Combine(unusedDir, "keep.zipmod")));
         Assert.True(File.Exists(Path.Combine(unusedDir, "dup2.zipmod")));
+    }
+
+    [Fact]
+    public async Task Scan_UnusedShaderMod_IncludedInMoveBack()
+    {
+        // unusedmods 里未被任何卡片引用、但 manifest 声明了 shader 的 mod：也纳入移回候选
+        var gameDir = MakeGameDir();
+        var unusedDir = Path.Combine(gameDir, "unusedmods");
+        Directory.CreateDirectory(unusedDir);
+        var shaderManifest = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest>\n" +
+                             "<guid>g-shader</guid>\n<name>Shader Pack</name>\n<version>1.0</version>\n" +
+                             "<MaterialEditor>\n<Shader Name=\"xukmi/SkinPlus\" />\n" +
+                             "</MaterialEditor>\n</manifest>";
+        TestAssets.WriteZipmod(unusedDir, "shader.zipmod", shaderManifest);
+        TestAssets.WriteZipmod(unusedDir, "keep.zipmod", TestAssets.MakeManifest("g-keep", "Keep"));
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.ModMarker("g-other")); // 不引用 unusedmods 里任何 mod
+
+        using var config = new ConfigService(_dir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.GamePath = gameDir;
+
+        string? confirmMsg = null;
+        vm.MoveBackConfirmationRequested += (_, msg) => confirmMsg = msg;
+        await vm.ScanCommand.ExecuteAsync(null);
+
+        Assert.True(vm.ScanCompleted);
+        Assert.Equal(2, vm.UnusedModCount);
+        Assert.NotNull(confirmMsg);
+        Assert.Contains("1 个", confirmMsg); // 候选仅 shader 包
+
+        var (moved, failed) = await vm.ConfirmMoveBackAsync();
+        Assert.Equal((1, 0), (moved, failed));
+        Assert.True(File.Exists(Path.Combine(gameDir, "mods", "shader.zipmod")));
+        Assert.True(config.Settings.Current.LocalMods.ContainsKey("g-shader"));
+        Assert.True(File.Exists(Path.Combine(unusedDir, "keep.zipmod"))); // 普通未引用 mod 原地不动
     }
 
     [Fact]

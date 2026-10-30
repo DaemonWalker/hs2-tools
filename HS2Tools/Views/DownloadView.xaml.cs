@@ -1,15 +1,15 @@
-using System.Windows;
+using System.Windows.Controls;
 using HS2Tools.ViewModels;
 
 namespace HS2Tools.Views;
 
-/// <summary>下载任务管理窗口：统计三卡 + 四 Tab 任务列表；关闭窗口不中断下载</summary>
-public partial class DownloadWindow : Window
+/// <summary>下载任务页：统计 + 四类任务列表；切换页面不中断下载</summary>
+public partial class DownloadView : UserControl
 {
-    public DownloadWindow()
+    public DownloadView()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => InitViewModel();
+        Loaded += (_, _) => InitViewModel();
     }
 
     private void InitViewModel()
@@ -17,7 +17,7 @@ public partial class DownloadWindow : Window
         if (DataContext is DownloadWindowViewModel)
             return;
         if (App.Services is not { } s)
-            return; // 测试环境（无 Application）
+            return;
 
         DataContext = new DownloadWindowViewModel(s.Downloads);
     }

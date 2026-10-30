@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HS2Tools.Models;
@@ -8,7 +7,7 @@ using Microsoft.Win32;
 
 namespace HS2Tools.ViewModels;
 
-/// <summary>顶部游戏切换器的一项（当前游戏高亮且禁用）</summary>
+/// <summary>全局游戏下拉框的一项</summary>
 public partial class GameSwitchItemViewModel : ObservableObject
 {
     public required GameProfile Profile { get; init; }
@@ -32,7 +31,7 @@ public enum SideloaderUiState
 }
 
 /// <summary>
-/// 主窗口（首页）ViewModel：路径设置、数据分析（三阶段扫描）、快速启动（A1 修复）、
+/// 主壳与工作台共用 ViewModel：全局游戏切换、路径设置、数据分析、快速启动、
 /// sideloader 更新（运行/停止）、缺失 Mod 批量补全、数据概览。
 /// </summary>
 public partial class MainWindowViewModel : ObservableObject
@@ -86,10 +85,25 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>测试用：非 null 时覆盖下载 base URL（默认取当前游戏档案的 SideloadBaseUrl）</summary>
     internal string? DownloadBaseUrlOverride;
 
-    // ==================== 游戏切换（顶部切换器；数据来自 GameProfiles.All） ====================
+    // ==================== 游戏切换（侧栏底部全局下拉框；数据来自 GameProfiles.All） ====================
 
-    /// <summary>切换器按钮项（当前游戏 IsCurrent=true，UI 高亮且禁用）</summary>
+    /// <summary>全局游戏选项（当前游戏 IsCurrent=true）</summary>
     public ObservableCollection<GameSwitchItemViewModel> GameSwitchItems { get; }
+
+    /// <summary>全局下拉框选中项；运行中拒绝切换时立即回退到当前游戏。</summary>
+    public GameSwitchItemViewModel SelectedGameSwitchItem
+    {
+        get => GameSwitchItems.First(item => item.IsCurrent);
+        set
+        {
+            if (value is null || value.Id == _loadedGameId)
+                return;
+            if (CanSwitchGame())
+                SwitchGame(value.Id);
+            else
+                OnPropertyChanged(nameof(SelectedGameSwitchItem));
+        }
+    }
 
     /// <summary>当前游戏档案（标题/路径卡片等文案绑定其 DisplayName/GameExeName）</summary>
     public GameProfile CurrentProfile => _config.CurrentProfile;
@@ -123,6 +137,7 @@ public partial class MainWindowViewModel : ObservableObject
         foreach (var item in GameSwitchItems)
             item.IsCurrent = item.Id == gameId;
         OnPropertyChanged(nameof(CurrentProfile));
+        OnPropertyChanged(nameof(SelectedGameSwitchItem));
 
         // 扫描进度/结果属于旧游戏，重置展示（统计数据为各游戏独立存储，由 RefreshStats 重读）
         ScanCompleted = false;
@@ -254,21 +269,11 @@ public partial class MainWindowViewModel : ObservableObject
             ScanStep = 1;
             ModScanDone = true;
 
-            // shader 使用检测：卡片不按 GUID 引用 shader 包，但会把 shader 名明文留在 KKEx
-            // （Material Editor 数据）里；以全部条目 manifest 声明的 shader 名为候选做内容级匹配
-            // （与读卡同一趟磁盘读取，只多内存匹配），命中名单随分析结果持久化供整理豁免用
-            var shaderNames = entries
-                .SelectMany(e => e.Info.ShaderNames)
-                .Distinct(StringComparer.Ordinal)
-                .Select(n => new KeyValuePair<string, byte[]>(n, Encoding.UTF8.GetBytes(n)))
-                .ToList();
-            var usedShaderNames = new HashSet<string>(StringComparer.Ordinal);
-
-            var sceneUsage = await ScanPngUsageAsync(_config.GetSceneDir()!, p => SceneScanProgress = p, shaderNames, usedShaderNames);
+            var sceneUsage = await ScanPngUsageAsync(_config.GetSceneDir()!, p => SceneScanProgress = p);
             ScanStep = 2;
             SceneScanDone = true;
 
-            var charaUsage = await ScanPngUsageAsync(_config.GetCharaDir()!, p => CharaScanProgress = p, shaderNames, usedShaderNames);
+            var charaUsage = await ScanPngUsageAsync(_config.GetCharaDir()!, p => CharaScanProgress = p);
             ScanStep = 3;
             CharaScanDone = true;
 
@@ -277,9 +282,10 @@ public partial class MainWindowViewModel : ObservableObject
             foreach (var (guid, count) in charaUsage)
                 mergedUsage[guid] = count;
 
-            // 移回候选：unusedmods 里被卡片引用、且 mods 里没有同 GUID（同 GUID 已在 mods 的属重复，留给整理去重）
+            // 移回候选：unusedmods 里被卡片引用、或 manifest 声明了 shader 的 mod（shader 包不按 GUID
+            // 被卡片引用，只要含 shader 信息就视为在用），且 mods 里没有同 GUID（同 GUID 已在 mods 的属重复，留给整理去重）
             _pendingMoveBack = unusedMods
-                .Where(kv => mergedUsage.ContainsKey(kv.Key) && !mods.ContainsKey(kv.Key))
+                .Where(kv => (mergedUsage.ContainsKey(kv.Key) || kv.Value.ShaderNames.Count > 0) && !mods.ContainsKey(kv.Key))
                 .Select(kv => (kv.Key, kv.Value))
                 .ToList();
 
@@ -287,18 +293,17 @@ public partial class MainWindowViewModel : ObservableObject
             {
                 s.Current.LocalMods = mods;
                 s.Current.ModUsage = mergedUsage;
-                // 去重/整理的数据源缓存：完整条目（含重复）+ 分卡引用 + shader 命中 + 时点
+                // 去重/整理的数据源缓存：完整条目（含重复）+ 分卡引用 + 时点
                 s.Current.ModEntries = entries;
                 s.Current.CharaUsage = charaUsage;
                 s.Current.SceneUsage = sceneUsage;
-                s.Current.UsedShaderNames = usedShaderNames.ToList();
                 s.Current.LastAnalysisTime = DateTime.Now;
             });
             ScanCompleted = true;
 
             if (_pendingMoveBack.Count > 0)
                 MoveBackConfirmationRequested?.Invoke(this,
-                    $"发现 {_pendingMoveBack.Count} 个被角色/场景卡引用的 Mod 在 unusedmods 中，移回后对应卡片将不再缺失。\n\n是否移回 mods 目录？");
+                    $"发现 {_pendingMoveBack.Count} 个被角色/场景卡引用或包含 shader 的 Mod 在 unusedmods 中。\n\n是否移回 mods 目录？");
         }
         catch (Exception ex)
         {
@@ -399,14 +404,8 @@ public partial class MainWindowViewModel : ObservableObject
         return (movedPairs.Count, failed);
     }
 
-    /// <summary>
-    /// 阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数。
-    /// shaderNames 非空时同一趟读取顺带做 shader 使用检测（命中名累积进 usedShaderNames，供整理豁免）。
-    /// </summary>
-    private async Task<Dictionary<string, int>> ScanPngUsageAsync(
-        string dir, Action<string> report,
-        IReadOnlyList<KeyValuePair<string, byte[]>>? shaderNames = null,
-        HashSet<string>? usedShaderNames = null)
+    /// <summary>阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数</summary>
+    private async Task<Dictionary<string, int>> ScanPngUsageAsync(string dir, Action<string> report)
     {
         var files = _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".png" } });
         report($"0/{files.Count}");
@@ -415,26 +414,11 @@ public partial class MainWindowViewModel : ObservableObject
         for (var i = 0; i < files.Count; i += BatchSize)
         {
             var batch = files.GetRange(i, Math.Min(BatchSize, files.Count - i));
-            if (shaderNames is { Count: > 0 })
+            var batchResults = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
+            foreach (var item in batchResults)
             {
-                var batchResults = await _scanner.ReadPngModsAndShadersBatchAsync(batch, shaderNames, onError: LogScanError);
-                foreach (var item in batchResults)
-                {
-                    foreach (var modId in item.ModIDs)
-                        usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
-                    if (usedShaderNames is not null)
-                        foreach (var name in item.ShaderNames)
-                            usedShaderNames.Add(name);
-                }
-            }
-            else
-            {
-                var batchResults = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
-                foreach (var item in batchResults)
-                {
-                    foreach (var modId in item.ModIDs)
-                        usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
-                }
+                foreach (var modId in item.ModIDs)
+                    usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
             }
             report($"{Math.Min(i + BatchSize, files.Count)}/{files.Count}");
         }

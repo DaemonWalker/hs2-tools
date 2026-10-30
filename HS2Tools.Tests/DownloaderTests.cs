@@ -80,6 +80,25 @@ public class DownloaderTests : IDisposable
         Assert.Contains(_server.Requests, r => r.Range == "bytes=200-");
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(100)]
+    public async Task Download_ResumeRangeNotSatisfiable_Restarts(int extraBytes)
+    {
+        var payload = Payload(50 * 1024);
+        _server.MapFile("/file.zipmod", payload, supportRange: true);
+        var output = Path.Combine(_dir, "out.zipmod");
+        File.WriteAllBytes(output, payload.Concat(new byte[extraBytes]).ToArray());
+
+        await new DownloaderService().DownloadAsync(
+            _server.BaseUrl + "file.zipmod", output, resume: true);
+
+        Assert.Equal(payload, File.ReadAllBytes(output));
+        Assert.Contains(_server.Requests, r => r.Range == $"bytes={payload.Length + extraBytes}-");
+        Assert.Contains(_server.Requests, r => r.Path == "/file.zipmod" && r.Range == null);
+        Assert.Equal(2, _server.Requests.Count(r => r.Path == "/file.zipmod"));
+    }
+
     [Fact]
     public async Task Download_NoResume_IgnoresExistingFile()
     {

@@ -121,6 +121,11 @@ public class ConfigService : IDisposable
     /// <summary>当前游戏档案（未知 CurrentGame 回退 HS2）</summary>
     public GameProfile CurrentProfile => GameProfiles.Get(Settings.CurrentGame);
 
+    /// <summary>当前目录包含当前游戏主程序；切换游戏后用于阻止误扫其他游戏目录。</summary>
+    public bool IsCurrentGamePathValid =>
+        !string.IsNullOrWhiteSpace(Settings.Current.GamePath)
+        && File.Exists(Path.Combine(Settings.Current.GamePath, CurrentProfile.GameExeName));
+
     /// <summary>
     /// 加载配置。原版语义：文件不存在返回空配置而非异常；
     /// 文件损坏时同样回退空配置（避免应用无法启动）。

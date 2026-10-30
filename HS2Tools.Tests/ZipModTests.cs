@@ -66,7 +66,7 @@ public class ZipModTests : IDisposable
     [Fact]
     public void ReadZipMod_CleansGuidAndName_ButNotVersion()
     {
-        // guid/name 含控制字符与非 ASCII → 清洗；version 含制表符/换行 → 原样保留
+        // GUID 移除控制字符并 Trim，但保留 Unicode；name 仍只保留 ASCII；version 原样保留
         var manifest = "<?xml version=\"1.0\"?>\n<manifest>\n" +
                        "<guid> com.test.dirty\t测 </guid>\n" +
                        "<name>My\nMod😀Name</name>\n" +
@@ -77,9 +77,17 @@ public class ZipModTests : IDisposable
         var result = _svc.ReadZipMod(path);
 
         var info = Assert.Single(result);
-        Assert.Equal("com.test.dirty", info.Key);
+        Assert.Equal("com.test.dirty测", info.Key);
         Assert.Equal("MyModName", info.Value.Name);
         Assert.Equal("\t1.0.0\n", info.Value.Version);
+    }
+
+    [Fact]
+    public void NormalizeGuid_PreservesUnicode_RemovesControlsAndTrims()
+    {
+        Assert.Equal("[Ω-G16] HS2-KK Set", ScannerService.NormalizeGuid(" \t[Ω-G16] HS2-KK Set\r\n"));
+        Assert.Equal("七色的人偶.夜々", ScannerService.NormalizeGuid("七色的人偶.夜々"));
+        Assert.Equal("Blue Archive", ScannerService.NormalizeGuid("Blue Archive "));
     }
 
     [Fact]

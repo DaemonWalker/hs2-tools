@@ -27,7 +27,8 @@ public partial class App : Application
 
         base.OnStartup(e);
 
-        Services.Windows.Show<MainWindow>(); // ViewModel 由窗口在 SourceInitialized 时自建
+        MainWindow = new MainWindow();
+        MainWindow.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)

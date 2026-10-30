@@ -1,0 +1,84 @@
+<UserControl x:Class="HS2Tools.Views.ModsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="28,26,28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="本地模组" Style="{StaticResource PageTitle}"/>
+            <TextBlock Text="查看依赖使用情况，整理目录并清理重复文件" Style="{StaticResource PageSubtitle}"/>
+        </StackPanel>
+
+        <UniformGrid Grid.Row="1" Columns="3" Margin="0,20,0,16">
+            <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                <StackPanel>
+                    <TextBlock Text="本地 Mods 总数" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding ModCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                <StackPanel>
+                    <TextBlock Text="被引用 Mods 数" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding UsageCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource AccentBrush}"/>
+                </StackPanel>
+            </Border>
+            <Border Style="{StaticResource StatCard}">
+                <StackPanel>
+                    <TextBlock Text="总引用次数" Style="{StaticResource StatTitle}"/>
+                    <TextBlock Text="{Binding TotalRefs, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                               Foreground="{DynamicResource SuccessBrush}"/>
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,16" Padding="12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Background="{DynamicResource WindowBackgroundBrush}" CornerRadius="7" Padding="2"
+                        HorizontalAlignment="Left">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton Content="全部模组" GroupName="ModFilter" IsChecked="True"
+                                     Style="{StaticResource SegmentedRadioButton}"/>
+                        <RadioButton Content="未使用" GroupName="ModFilter"
+                                     IsChecked="{Binding ShowUnusedOnly, Mode=TwoWay}"
+                                     Style="{StaticResource SegmentedRadioButton}"/>
+                    </StackPanel>
+                </Border>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}"/>
+                    <Button Content="{Binding DedupButtonText}" Command="{Binding DedupCommand}" Margin="8,0,0,0"/>
+                    <Button Content="{Binding OrganizeButtonText}" Command="{Binding OrganizeCommand}"
+                            Style="{StaticResource PrimaryButton}" Margin="8,0,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3">
+            <DataGrid ItemsSource="{Binding Mods}"
+                      AutoGenerateColumns="False" IsReadOnly="True"
+                      EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                      GridLinesVisibility="Horizontal" HeadersVisibility="Column">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="GUID" Binding="{Binding Guid}" Width="280" SortMemberPath="Guid"/>
+                    <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="220" SortMemberPath="Name"/>
+                    <DataGridTextColumn Header="版本" Binding="{Binding Version}" Width="90" SortMemberPath="Version"/>
+                    <DataGridTextColumn Header="使用次数" Binding="{Binding UsedCount}" Width="90" SortMemberPath="UsedCount"/>
+                    <DataGridTextColumn Header="路径" Binding="{Binding Path}" Width="*" SortMemberPath="Path"/>
+                </DataGrid.Columns>
+            </DataGrid>
+            <TextBlock Text="{Binding EmptyText}" FontSize="14" TextWrapping="Wrap"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40,0"
+                       Foreground="{DynamicResource SecondaryForegroundBrush}"
+                       Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}"/>
+        </Grid>
+    </Grid>
+</UserControl>

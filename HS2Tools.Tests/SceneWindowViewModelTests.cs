@@ -53,4 +53,36 @@ public class SceneWindowViewModelTests : IDisposable
         Assert.Equal(2, vm.AllPaths.Count);
         Assert.All(vm.AllPaths, p => Assert.StartsWith(kkDir, p, StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void ConfigChanged_InvalidThenFixedPath_ClearsAndRescansScenes()
+    {
+        var hs2Dir = Path.Combine(_dir, "game-hs2");
+        Directory.CreateDirectory(Path.Combine(hs2Dir, GameProfiles.Hs2.SceneDirRelative));
+        File.WriteAllText(Path.Combine(hs2Dir, GameProfiles.Hs2.GameExeName), "exe");
+        TestAssets.WritePng(Path.Combine(hs2Dir, GameProfiles.Hs2.SceneDirRelative), "s1.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("场景"));
+
+        var kkDir = Path.Combine(_dir, "game-kk");
+        Directory.CreateDirectory(Path.Combine(kkDir, GameProfiles.Kk.SceneDirRelative));
+        File.WriteAllText(Path.Combine(kkDir, GameProfiles.Kk.GameExeName), "exe");
+        TestAssets.WritePng(Path.Combine(kkDir, GameProfiles.Kk.SceneDirRelative), "k1.png",
+            TestAssets.PngPrefix(), TestAssets.NameMarker("恋活场景"));
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => { s.CurrentGame = "hs2"; s.Current.GamePath = hs2Dir; });
+        config.Update(s => { s.CurrentGame = "kk"; s.Current.GamePath = hs2Dir; });
+        config.Update(s => s.CurrentGame = "hs2");
+        var vm = MakeVm(config);
+        vm.LoadCardPaths();
+        Assert.Single(vm.AllPaths);
+
+        config.Update(s => s.CurrentGame = "kk");
+        Assert.Empty(vm.AllPaths);
+        Assert.Contains(GameProfiles.Kk.GameExeName, vm.EmptyText, StringComparison.OrdinalIgnoreCase);
+
+        config.Update(s => s.Current.GamePath = kkDir);
+        Assert.Single(vm.AllPaths);
+        Assert.EndsWith("k1.png", vm.AllPaths[0], StringComparison.OrdinalIgnoreCase);
+    }
 }

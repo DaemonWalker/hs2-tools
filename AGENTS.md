@@ -26,7 +26,7 @@ HS2Tools/
 │                  #   Sideloader/SideloadDatabase/GameLauncher/ErrorLog），与 UI 解耦可单测
 ├── Models/        # AppSettings（含 per-game GameData）/ GameProfiles 静态注册表
 ├── ViewModels/    # 每页一个 VM（+ 共用 CardDetailViewModel）
-├── Views/         # 每页一个独立 Window（WindowManager 单例 + Hide/Show 保状态）
+├── Views/         # MainWindow 单窗口主壳 + HomeView/7 个功能页面（PageManager 缓存保状态）
 ├── Controls/      # CardGridControl（虚拟化网格）/ CardDetailPanel / VirtualizingWrapPanel
 ├── Themes/        # 单主题资源字典（控件一律 DynamicResource）
 └── Resources/     # sideload.zip（EmbeddedResource，仅 HS2 库的 SideloadDatabase 回退）
@@ -48,10 +48,10 @@ dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
 ## 关键约定
 
 - **决策一律请示用户**：修改或新增功能时，只要出现两种及以上可行方案/取舍（实现方式、行为口径、兼容范围等），必须直接询问用户选择，不得自行替用户做决定。
-- **状态下沉服务层单例**，Window 只是视图；跨窗体通信走服务事件；VM/窗口与服务同寿，永久订阅。
-- **游戏特定知识集中在 GameProfiles**（exe 名、目录相对路径、卡片标记字节、Parameter 名字段键、sideload 数据源与 base URL）；服务层一律经 `ConfigService.CurrentProfile` 按当前游戏求值，不得另写游戏常量。卡片解析按卡头标记自动识别格式（HS2【AIS_Chara】与 KK/KKS【KoiKatuChara】都认，不依赖当前游戏）。KK/KKS 的 exe 名按常见安装版填写，待真实环境验证。
-- **行为保真**：扫描/下载/爬虫逻辑按既定行为 1:1 复刻（字节级 hack 全部保留，注释注明出处）；网络/编码边界行为有既定口径，改动前先读相关注释与测试。
-- **Mods 窗口去重/整理走分析缓存**：数据源是「开始分析」持久化的 `GameData.ModEntries`（完整条目，含重复 guid、覆盖 unusedmods）/ `CharaUsage` / `SceneUsage` / `UsedShaderNames` / `LastAnalysisTime`，不自行重扫磁盘（硬盘压力考虑）；shader 命中检测在主分析读卡的同一趟完成。执行前逐文件存在性校验（消失的跳过记日志），执行后同步改写缓存（去重移除落选条目；整理按赢家最终落点重建，移动失败的落选者保留）。Mods 窗口「刷新模组列表」保持轻量只更新 LocalMods 展示。
+- **单窗口主壳 + 页面缓存**：MainWindow 持有侧栏底部全局游戏下拉框与工作台共用的 VM；PageManager 缓存 UserControl 页面，切页保状态。状态下沉服务层单例，跨页通信走服务事件；VM/页面与服务同寿，永久订阅。
+- **游戏特定知识集中在 GameProfiles**（exe 名、目录相对路径、卡片标记字节、Parameter 名字段键、sideload 数据源与 base URL）；服务层一律经 `ConfigService.CurrentProfile` 按当前游戏求值，不得另写游戏常量。角色卡/场景页监听游戏与路径变化并自动重扫；目录缺少当前游戏 exe 时清空网格并提示，不得误展示其他游戏内容。卡片解析按卡头标记自动识别格式（HS2【AIS_Chara】与 KK/KKS【KoiKatuChara】都认，不依赖当前游戏）。KK/KKS 的 exe 名按常见安装版填写，待真实环境验证。
+- **行为保真**：扫描/下载/爬虫逻辑按既定行为 1:1 复刻（字节级 hack 全部保留，注释注明出处）；网络/编码边界行为有既定口径，改动前先读相关注释与测试。例外：Mod GUID 在卡片引用、zipmod manifest 与站点索引入口统一规范化（保留 Unicode、移除控制字符并 Trim），不得再用 ASCII 清洗 GUID。
+- **Mods 窗口去重/整理走分析缓存**：数据源是「开始分析」持久化的 `GameData.ModEntries`（完整条目，含重复 guid、覆盖 unusedmods）/ `CharaUsage` / `SceneUsage` / `LastAnalysisTime`，不自行重扫磁盘（硬盘压力考虑）。shader 豁免按 mod 自身判定：manifest 含 `<MaterialEditor><Shader .../>` 声明（`ModInfo.ShaderNames` 非空）即视为在用，按人物卡引用同口径处理（不进 unusedmods；误在其中的移回 mods，首页移回提示同样纳入）——不做卡片内容匹配。执行前逐文件存在性校验（消失的跳过记日志），执行后同步改写缓存（去重移除落选条目；整理按赢家最终落点重建，移动失败的落选者保留）。Mods 窗口「刷新模组列表」保持轻量只更新 LocalMods 展示。
 - **卡片/场景解析**：以 IllusionModdingAPI/BepisPlugins（KK/KKS 参照 kkloader）为基准做结构化解析（`CharaCardParser`：BlockHeader + KKEx/UAR，MessagePack-CSharp 底层 Reader/Writer）；旧字节扫描（`SearchBuffer`）仅作数据区内回退路径（HS2 与 KK 字段名都认），不再全文件扫描。数据区起点 = 真 IEND chunk（PNG chunk 步行定位；反向字节扫描仅作非 PNG/损坏文件回退——追加的游戏数据可能碰巧含 "IEND" 字节，反扫会误判截断点）。blob 信封按游戏分两种（`GameProfile.CharaBlobHasFacePng`）：HS2 = version + lang/userID/dataID；KK/KKS = version + facePng（int32 长度 + 字节），无 lang/userID/dataID（真实卡实测）。
 - 不得"静默吞错"：跳过的条目、失败的任务至少 `ErrorLog` 记一条；用户可见失败统一"XX失败：原因"。
 - 长任务（扫描/补全/爬虫/整理）防重入：CanExecute + 标志位双保险；取消一律 CancellationTokenSource。

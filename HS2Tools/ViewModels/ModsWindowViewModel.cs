@@ -22,7 +22,7 @@ public partial class ModItemViewModel : ObservableObject
 /// 本地模组窗口 ViewModel（对应原版 Mods/LocalMods.tsx）：
 /// 统计三卡（本地 Mods 总数 / 被引用 Mods 数 / 总引用次数，与首页数据概览同口径）、
 /// 所有/未使用筛选、刷新重扫 mods 目录 zipmod。
-/// 去重/整理不重扫磁盘，以首页「开始分析」持久化的缓存（ModEntries/CharaUsage/SceneUsage/UsedShaderNames）为数据源。
+/// 去重/整理不重扫磁盘，以首页「开始分析」持久化的缓存（ModEntries/CharaUsage/SceneUsage）为数据源。
 /// </summary>
 public partial class ModsWindowViewModel : ObservableObject
 {
@@ -369,26 +369,10 @@ public partial class ModsWindowViewModel : ObservableObject
             var charaUsage = new HashSet<string>(settings.CharaUsage.Keys, StringComparer.OrdinalIgnoreCase);
             var sceneUsage = new HashSet<string>(settings.SceneUsage.Keys, StringComparer.OrdinalIgnoreCase);
 
-            // shader 豁免：分析时卡片 KKEx 命中的 shader 名 → 提供它的 mod GUID（按人物卡引用同口径豁免）
-            var shaderNameToGuids = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-            foreach (var (guid, info) in entries)
-            {
-                foreach (var name in info.ShaderNames)
-                {
-                    if (!shaderNameToGuids.TryGetValue(name, out var guids))
-                        shaderNameToGuids[name] = guids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    guids.Add(guid);
-                }
-            }
-            var shaderUsage = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var name in settings.UsedShaderNames)
-                if (shaderNameToGuids.TryGetValue(name, out var guids))
-                    foreach (var guid in guids)
-                        shaderUsage.Add(guid);
-
             // 有扫描记录（meta 存在）才按站点目录归位，否则站点索引不参与分类
             var siteIndex = _sideloadDb.GetMeta() is not null ? _sideloadDb.Database : null;
-            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage, shaderUsage, siteIndex, gamePath, modsDir);
+            // shader 豁免在 BuildPlan 内按条目 manifest 声明（ModInfo.ShaderNames 非空）判定
+            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage, siteIndex, gamePath, modsDir);
             if (plan.Duplicates.Count == 0 && plan.Unused.Count == 0 &&
                 plan.SceneOnly.Count == 0 && plan.SitePlaced.Count == 0)
             {

@@ -45,6 +45,27 @@ public class SideloadDatabaseServiceTests : IDisposable
     }
 
     [Fact]
+    public void UpdateAndLoad_NormalizeGuidKeys()
+    {
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, string>
+        {
+            [" [Ω-G16] HS2-KK Set\r\n"] = "omega.zipmod",
+            ["Blue Archive "] = "blue.zipmod",
+        });
+
+        Assert.Equal("omega.zipmod", db.Database["[Ω-G16] HS2-KK Set"]);
+        Assert.Equal("blue.zipmod", db.Database["Blue Archive"]);
+
+        using var config2 = NewConfig();
+        var reloaded = new SideloadDatabaseService(config2);
+        Assert.Equal("omega.zipmod", reloaded.Database["[Ω-G16] HS2-KK Set"]);
+        Assert.Equal("blue.zipmod", reloaded.Database["Blue Archive"]);
+        Assert.DoesNotContain("Blue Archive ", reloaded.Database.Keys);
+    }
+
+    [Fact]
     public void Load_CorruptFile_FallsBackToBundled()
     {
         File.WriteAllText(SourcePath("hs2"), "not-json{");

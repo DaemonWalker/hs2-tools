@@ -1,16 +1,17 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using HS2Tools.ViewModels;
 
 namespace HS2Tools.Views;
 
-/// <summary>系统设置窗口：代理表单（保存时校验）+ 防休眠开关（即时生效）</summary>
-public partial class SettingsWindow : Window
+/// <summary>系统设置页：代理表单 + 防休眠开关</summary>
+public partial class SettingsView : UserControl
 {
-    public SettingsWindow()
+    public SettingsView()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => InitViewModel();
+        Loaded += (_, _) => InitViewModel();
     }
 
     private void InitViewModel()

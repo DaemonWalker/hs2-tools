@@ -1,0 +1,244 @@
+<UserControl x:Class="HS2Tools.Views.HomeView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="28,26,28,28">
+            <StackPanel>
+                <TextBlock Text="游戏工作台" Style="{StaticResource PageTitle}"/>
+                <TextBlock Text="{Binding CurrentProfile.DisplayName, StringFormat=集中管理你的 {0} 角色卡、场景和模组}"
+                           Style="{StaticResource PageSubtitle}"/>
+            </StackPanel>
+
+            <Border Style="{StaticResource Card}" Margin="0,24,0,0" Padding="16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Width="38" Height="38" CornerRadius="8" Background="{DynamicResource AccentSoftBrush}">
+                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="17"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="12,0,12,0">
+                        <TextBlock Text="游戏目录" FontWeight="SemiBold"/>
+                        <Grid Margin="0,7,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding GamePath, UpdateSourceTrigger=PropertyChanged}"
+                                     Tag="选择包含游戏主程序的目录"/>
+                            <Button Grid.Column="1" Content="浏览" Margin="8,0,0,0" Command="{Binding BrowseCommand}"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,7,0,0">
+                            <Ellipse Width="7" Height="7" Margin="0,0,6,0">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="{DynamicResource ErrorBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsGamePathValid}" Value="True">
+                                                <Setter Property="Fill" Value="{DynamicResource SuccessBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <TextBlock Text="{Binding PathStatusText}" FontSize="12"
+                                       Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <UniformGrid Columns="4" Margin="0,16,0,0">
+                <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="本地 Mods" Style="{StaticResource StatTitle}"/>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding ModCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"/>
+                            <TextBlock Text="{Binding UnusedModCount, StringFormat='  +{0} 未使用'}" FontSize="11"
+                                       VerticalAlignment="Bottom" Margin="0,0,0,5"
+                                       Foreground="{DynamicResource SecondaryForegroundBrush}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding UnusedModCount}" Value="0">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="被引用 Mods" Style="{StaticResource StatTitle}"/>
+                        <TextBlock Text="{Binding UsageCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="总引用次数" Style="{StaticResource StatTitle}"/>
+                        <TextBlock Text="{Binding TotalRefs, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource StatCard}">
+                    <StackPanel>
+                        <TextBlock Text="缺失 Mods" Style="{StaticResource StatTitle}"/>
+                        <TextBlock Text="{Binding MissingModCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                                   Foreground="{DynamicResource WarningBrush}"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <Grid Margin="0,16,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="3*"/>
+                    <ColumnDefinition Width="2*"/>
+                </Grid.ColumnDefinitions>
+                <Border Style="{StaticResource Card}" Margin="0,0,16,0">
+                    <StackPanel>
+                        <Grid>
+                            <StackPanel>
+                                <TextBlock Text="数据分析" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Text="扫描模组与卡片，建立依赖统计" Style="{StaticResource HintText}" Margin="0,3,0,0"/>
+                            </StackPanel>
+                            <Button HorizontalAlignment="Right" VerticalAlignment="Top"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Content="{Binding ScanButtonText}" Command="{Binding ScanCommand}"/>
+                        </Grid>
+                        <StackPanel Margin="0,18,0,0">
+                            <Grid Margin="0,5">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="模组文件"/>
+                                    <TextBlock Text=" ✓" Foreground="{DynamicResource SuccessBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers><DataTrigger Binding="{Binding ModScanDone}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding ModScanProgress}" Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                            </Grid>
+                            <Grid Margin="0,5">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="场景卡片"/>
+                                    <TextBlock Text=" ✓" Foreground="{DynamicResource SuccessBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers><DataTrigger Binding="{Binding SceneScanDone}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding SceneScanProgress}" Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                            </Grid>
+                            <Grid Margin="0,5">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="角色卡片"/>
+                                    <TextBlock Text=" ✓" Foreground="{DynamicResource SuccessBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers><DataTrigger Binding="{Binding CharaScanDone}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding CharaScanProgress}" Foreground="{DynamicResource SecondaryForegroundBrush}"/>
+                            </Grid>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ScanError}" Foreground="{DynamicResource ErrorBrush}"
+                                   TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <TextBlock Text="首次使用或文件更新后，建议重新执行分析"
+                                   Style="{StaticResource HintText}" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="快速启动" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="直接进入游戏或工作室" Style="{StaticResource HintText}" Margin="0,3,0,18"/>
+                        <Button Content="启动游戏" Style="{StaticResource PrimaryButton}" MinHeight="44"
+                                Command="{Binding LaunchGameCommand}"/>
+                        <Button Content="启动工作室" Margin="0,10,0,0" MinHeight="40"
+                                Command="{Binding LaunchStudioCommand}"/>
+                        <TextBlock Text="{Binding LaunchStatusText}" Foreground="{DynamicResource ErrorBrush}"
+                                   TextWrapping="Wrap" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Grid Margin="0,16,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Style="{StaticResource Card}" Margin="0,0,16,0">
+                    <StackPanel>
+                        <TextBlock Text="Sideload 数据更新" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="获取 BetterRepack 最新模组索引，用于依赖补全"
+                                   Style="{StaticResource HintText}" Margin="0,4,0,14"/>
+                        <Button Content="{Binding SideloaderButtonText}" Command="{Binding ToggleSideloaderCommand}"
+                                HorizontalAlignment="Left"/>
+                        <StackPanel Visibility="{Binding IsSideloaderRunning, Converter={StaticResource BoolToVisibility}}" Margin="0,10,0,0">
+                            <TextBlock Text="{Binding SideloaderMessage}" FontSize="12" TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding SideloaderMessage}"/>
+                            <TextBlock Text="{Binding SideloaderFoundCount, StringFormat='已发现 {0} 个'}"
+                                       Style="{StaticResource HintText}" Margin="0,4,0,0"/>
+                        </StackPanel>
+                        <TextBlock Visibility="{Binding SideloaderSucceeded, Converter={StaticResource BoolToVisibility}}"
+                                   Text="{Binding SideloaderMessage}" Foreground="{DynamicResource SuccessBrush}" Margin="0,10,0,0"/>
+                        <TextBlock Visibility="{Binding SideloaderStopped, Converter={StaticResource BoolToVisibility}}"
+                                   Text="已停止：更新任务已被取消" Foreground="{DynamicResource WarningBrush}" Margin="0,10,0,0"/>
+                        <TextBlock Visibility="{Binding SideloaderFailed, Converter={StaticResource BoolToVisibility}}"
+                                   Text="{Binding SideloaderError, StringFormat='更新失败：{0}'}" Foreground="{DynamicResource ErrorBrush}"
+                                   TextWrapping="Wrap" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="缺失依赖补全" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock Text="自动下载角色与场景引用、但本地尚未安装的 Mods"
+                                   Style="{StaticResource HintText}" Margin="0,4,0,14"/>
+                        <TextBlock Text="所有 Mods 已就绪，当前没有需要补全的依赖" Foreground="{DynamicResource SuccessBrush}" TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers><DataTrigger Binding="{Binding ShowModsReady}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <Button Content="{Binding ComplementButtonText}" Command="{Binding ComplementMissingModsCommand}"
+                                HorizontalAlignment="Left">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers><DataTrigger Binding="{Binding HasMissingMods}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <StackPanel Visibility="{Binding IsComplementing, Converter={StaticResource BoolToVisibility}}" Margin="0,10,0,0">
+                            <TextBlock Text="{Binding ComplementProgress, StringFormat='总体进度：{0}'}" FontSize="12"/>
+                            <TextBlock Text="{Binding ComplementCurrentName, StringFormat='当前：{0}'}"
+                                       Style="{StaticResource HintText}" TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding ComplementCurrentName}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

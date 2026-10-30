@@ -84,12 +84,28 @@ public class ThumbnailCacheTests
         return result!;
     }
 
+    private static readonly object ApplicationSync = new();
+
     internal static void RunInSta(Action action)
     {
         Exception? error = null;
         var thread = new Thread(() =>
         {
-            try { action(); }
+            try
+            {
+                lock (ApplicationSync)
+                {
+                    if (Application.Current is null)
+                    {
+                        var app = new Application();
+                        app.Resources.MergedDictionaries.Add(new ResourceDictionary
+                        {
+                            Source = new Uri("/HS2Tools;component/Themes/Theme.xaml", UriKind.Relative),
+                        });
+                    }
+                }
+                action();
+            }
             catch (Exception ex) { error = ex; }
         });
         thread.SetApartmentState(ApartmentState.STA);

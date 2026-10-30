@@ -94,6 +94,15 @@ public class DownloaderService
             throw new DownloadCancelledException();
         }
 
+        // 本地文件已完整或大于远端文件时，续传起点会越界；放弃断点并从头重试一次。
+        if (resp.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable && startPos > 0)
+        {
+            resp.Dispose();
+            progress?.Report(new DownloadProgress { Type = DownloadMessageType.Info, Message = "Server rejected resume range, restarting download" });
+            await DownloadAsync(fileUrl, outputPath, resume: false, progress, ct);
+            return;
+        }
+
         using (resp)
         {
             // 检查响应状态

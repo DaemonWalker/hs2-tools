@@ -1,0 +1,99 @@
+{
+  "skill_name": "update-document",
+  "evals": [
+    {
+      "id": 1,
+      "name": "analyze-conversation-extract-changes",
+      "prompt": "分析以下对话历史，提取需要更新到文档的变更信息：\n用户: 我修改了 scanLogic.ts 中的扫描逻辑，添加了并发限制\nClaude: 好的，我帮你实现了并发控制，默认限制为5个并发\n用户: 另外把下载功能抽离成了独立的 downloader 工具",
+      "expected_output": "识别出 scanLogic.ts 的并发限制变更和 downloader 工具的创建，并建议更新 docs/Go工具/下载器.md 和 docs/功能模块/Mod管理.md",
+      "assertions": [
+        {
+          "type": "output_contains",
+          "content": "scanLogic"
+        },
+        {
+          "type": "output_contains",
+          "content": "downloader"
+        },
+        {
+          "type": "output_contains",
+          "content": "并发"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "update-links-after-rename",
+      "prompt": "根据对话历史更新文档链接：\n用户: 我把 docs/开发指南/02-快速开始.md 重命名为 docs/快速开始/开发指南.md\n请更新所有文档中指向这个文件的链接",
+      "expected_output": "识别文件重命名操作，更新所有引用该文件的链接为新的相对路径",
+      "assertions": [
+        {
+          "type": "file_not_contains",
+          "path": "docs/README.md",
+          "content": "开发指南/02-快速开始.md"
+        },
+        {
+          "type": "file_contains",
+          "path": "docs/README.md",
+          "content": "快速开始/开发指南.md"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "generate-content-suggestions",
+      "prompt": "根据以下对话生成文档更新建议：\n用户: 我在 IPC 接口中新增了 pauseDownload 和 resumeDownload 方法\nClaude: 这两个方法支持暂停和恢复下载任务\n用户: 对的，还需要传入 taskId 参数",
+      "expected_output": "识别 API 新增，建议更新 docs/API参考/IPC接口.md，添加 pauseDownload 和 resumeDownload 方法的说明",
+      "assertions": [
+        {
+          "type": "output_contains",
+          "content": "pauseDownload"
+        },
+        {
+          "type": "output_contains",
+          "content": "resumeDownload"
+        },
+        {
+          "type": "output_contains",
+          "content": "API参考"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "identify-multiple-targets",
+      "prompt": "分析对话并确定需要更新的所有文档：\n用户: 我们把项目从 Redux 迁移到了 Zustand，同时重写了主题系统\nClaude: 状态管理现在用 Zustand 更轻量，主题系统支持动态切换\n用户: 还新增了一个 ThemeSwitcher 组件",
+      "expected_output": "识别出需要更新 docs/前端开发/状态管理.md、docs/前端开发/主题系统.md 和 docs/前端开发/组件规范.md",
+      "assertions": [
+        {
+          "type": "output_contains",
+          "content": "状态管理"
+        },
+        {
+          "type": "output_contains",
+          "content": "主题"
+        },
+        {
+          "type": "output_contains",
+          "content": "组件"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "handle-complex-file-operations",
+      "prompt": "处理复杂的文件操作：\n用户: 我把 go_tools/scanner/ 整个目录移动到了 go_tools/legacy/scanner/\n同时创建了新的 go_tools/scanner-v2/ 目录\nClaude: 旧版本标记为 legacy，新版本用 v2 实现",
+      "expected_output": "识别目录移动和创建操作，更新所有指向旧 scanner 路径的链接，并在文档中添加 scanner-v2 的说明",
+      "assertions": [
+        {
+          "type": "output_contains",
+          "content": "legacy/scanner"
+        },
+        {
+          "type": "output_contains",
+          "content": "scanner-v2"
+        }
+      ]
+    }
+  ]
+}

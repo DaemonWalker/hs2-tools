@@ -131,7 +131,7 @@ public class SideloadDatabaseService
                 var json = File.ReadAllText(filePath);
                 var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
                 if (dict is { Count: > 0 })
-                    return dict;
+                    return NormalizeDatabase(dict);
             }
         }
         catch (Exception ex)
@@ -146,7 +146,7 @@ public class SideloadDatabaseService
             // kkec 等非 hs2 数据源无内嵌库：回退空字典并说明，用户需先运行爬虫更新
             ErrorLog.Log($"sideload 数据源 {sourceId} 无用户库且无内嵌库，返回空数据库（需先运行爬虫更新）");
         }
-        return bundled;
+        return NormalizeDatabase(bundled);
     }
 
     /// <summary>
@@ -176,10 +176,18 @@ public class SideloadDatabaseService
         lock (_sync)
         {
             var sourceId = CurrentSourceId;
-            var dict = new Dictionary<string, string>(database);
+            var dict = NormalizeDatabase(database);
             _cache[sourceId] = dict;
             File.WriteAllText(FilePathFor(sourceId), JsonSerializer.Serialize(dict));
         }
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static Dictionary<string, string> NormalizeDatabase(IEnumerable<KeyValuePair<string, string>> database)
+    {
+        var result = new Dictionary<string, string>();
+        foreach (var (guid, url) in database)
+            result[ScannerService.NormalizeGuid(guid)] = url;
+        return result;
     }
 }

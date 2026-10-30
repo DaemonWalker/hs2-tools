@@ -8,6 +8,7 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>HS2Tools</RootNamespace>
     <AssemblyName>HS2Tools</AssemblyName>
+    <ApplicationIcon>Resources\App.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +19,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\sideload.zip" />
+    <Resource Include="Resources\App.ico" />
   </ItemGroup>
 
   <ItemGroup>

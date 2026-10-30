@@ -12,7 +12,7 @@ public sealed record ModMove(ModInfo Mod, string TargetDir);
 /// 被引用且在站点索引 → SitePlaced（mods/&lt;站点目录&gt;/，含从 unusedmods 移回，站点目录优先于 scenemods）；
 /// 被引用且不在索引、仅场景 → SceneOnly（mods/scenemods）；
 /// 被引用且不在索引、人物卡引用 → 在 unusedmods 的移回 mods 根目录（进 SitePlaced），在 mods 的原地不动。
-/// "被引用"含 shader 使用：提供被卡片使用 shader 的 mod 按人物卡引用同口径处理（见 BuildPlan shaderUsage）。
+/// "被引用"含 shader：manifest 声明了 shader（MaterialEditor）的 mod 按人物卡引用同口径处理（见 BuildPlan）。
 /// </summary>
 public sealed class ModOrganizePlan
 {
@@ -42,15 +42,15 @@ public static class ModOrganizeHelper
     /// 由全部 zipmod 条目（mods + unusedmods 两处扫描结果，含重复 GUID）与两卡引用集合生成整理计划。
     /// 分组/裁决复刻 ModsWindowViewModel.DedupAsync：同 GUID 按
     /// <see cref="ScannerService.CompareModsForKeep"/>（版本高 → 体积大 → 日期新）取最优。
-    /// charaUsage/sceneUsage/shaderUsage 均为 OrdinalIgnoreCase 集合；siteIndex 为 null 表示未扫描过网站（不按站点目录归位）。
-    /// shaderUsage = 提供了被卡片使用 shader 的 mod GUID（卡片 KKEx 里 Material Editor 数据明文记录 shader 名）：
-    /// 按"人物卡引用"同口径豁免（不搬 unusedmods；已在 unusedmods 的移回 mods 根目录/站点目录）。
+    /// charaUsage/sceneUsage 均为 OrdinalIgnoreCase 集合；siteIndex 为 null 表示未扫描过网站（不按站点目录归位）。
+    /// manifest 声明了 shader（MaterialEditor，即 ModInfo.ShaderNames 非空）的 mod 按"人物卡引用"同口径豁免
+    /// （不搬 unusedmods；已在 unusedmods 的移回 mods 根目录/站点目录）——shader 包不会被卡片按 GUID 引用，
+    /// 是否在用只能靠 mod 自身是否提供 shader 判定，不做卡片内容匹配。
     /// </summary>
     public static ModOrganizePlan BuildPlan(
         IReadOnlyList<KeyValuePair<string, ModInfo>> entries,
         ISet<string> charaUsage,
         ISet<string> sceneUsage,
-        ISet<string> shaderUsage,
         IReadOnlyDictionary<string, string>? siteIndex,
         string gamePath,
         string modsDir)
@@ -82,8 +82,8 @@ public static class ModOrganizeHelper
         var sitePlaced = new List<ModMove>();
         foreach (var (guid, info) in winners)
         {
-            // shader 使用按人物卡引用同口径处理（全局 shader 包不会被卡片按 GUID 引用，只能靠内容匹配识别）
-            var usedByChara = charaUsage.Contains(guid) || shaderUsage.Contains(guid);
+            // 含 shader 声明的 mod 按人物卡引用同口径豁免（shader 包不会被卡片按 GUID 引用，声明即视为在用）
+            var usedByChara = charaUsage.Contains(guid) || info.ShaderNames.Count > 0;
             var usedByScene = sceneUsage.Contains(guid);
             if (!usedByChara && !usedByScene)
             {
