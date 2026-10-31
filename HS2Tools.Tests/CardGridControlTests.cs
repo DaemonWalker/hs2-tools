@@ -163,6 +163,11 @@ public class CardGridControlTests
             // 3 列 × (2 行可视 + 1 行缓冲) = 至多 9 个容器，远小于 200
             Assert.True(panel.RealizedCount is > 0 and <= 12,
                 $"realized {panel.RealizedCount}");
+
+            var firstRowLast = (UIElement)VisualTreeHelper.GetChild(panel, 2);
+            var rowRight = firstRowLast.TransformToAncestor(panel)
+                .Transform(new Point(firstRowLast.RenderSize.Width, 0)).X;
+            Assert.Equal(320, rowRight, 3);
         });
     }
 
@@ -273,6 +278,16 @@ public class CardGridControlTests
             var control = new CardGridControl();
             Assert.Equal(0, control.TotalCount);
             Assert.Equal(CardSortType.Favorite, control.SortType);
+        });
+    }
+
+    [Fact]
+    public void CardViews_ResponsiveDetailColumns_Instantiate()
+    {
+        ThumbnailCacheTests.RunInSta(() =>
+        {
+            Assert.NotNull(new HS2Tools.Views.CharaView());
+            Assert.NotNull(new HS2Tools.Views.SceneView());
         });
     }
 }

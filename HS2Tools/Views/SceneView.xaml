@@ -48,9 +48,9 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="220"/>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*" MinWidth="420"/>
+                            <ColumnDefinition Width="2*" MinWidth="420"/>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="{Binding DataContext.HasSelection, Source={x:Reference Grid}, Converter={StaticResource BoolToStarGridLength}}"/>
                         </Grid.ColumnDefinitions>
                         <Border Style="{StaticResource Card}" Padding="12,10,8,10" Margin="0,0,6,0">
                             <Grid>
@@ -84,7 +84,7 @@
                                                   EmptyText="{Binding EmptyText}"
                                                   SortType="{Binding SelectedValue, ElementName=SortBox}"/>
                         <GridSplitter Grid.Column="3" Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}"/>
-                        <Border Grid.Column="4" Width="380" Margin="6,0,0,0" Padding="16" CornerRadius="10"
+                        <Border Grid.Column="4" Margin="6,0,0,0" Padding="16" CornerRadius="10"
                                 Background="{DynamicResource CardBackgroundBrush}"
                                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                                 Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">

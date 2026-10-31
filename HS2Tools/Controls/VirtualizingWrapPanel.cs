@@ -7,7 +7,8 @@ namespace HS2Tools.Controls;
 
 /// <summary>
 /// 虚拟化 Wrap 面板（WPF 无内置 VirtualizingWrapPanel）。
-/// 简化前提：所有子项尺寸固定（ItemWidth × ItemHeight），因此列数/行号可直接按索引算出，
+/// ItemWidth 是最小槽宽：先按它计算列数，再均分视口宽度，避免行尾留下大块空白。
+/// 所有子项高度固定（ItemHeight），因此列数/行号可直接按索引算出，
 /// 只需实现经典 VirtualizingPanel + IScrollInfo 配方（按可视区实现化、离屏回收）。
 /// 须放在 CanContentScroll=true 的 ScrollViewer 中使用。被挂为滚动面板后，
 /// ScrollContentPresenter 会以无限高测量本面板：此时沿用上一趟有限视口决定实现化范围，
@@ -23,7 +24,7 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
         nameof(ItemHeight), typeof(double), typeof(VirtualizingWrapPanel),
         new FrameworkPropertyMetadata(296.0, FrameworkPropertyMetadataOptions.AffectsMeasure));
 
-    /// <summary>子项固定宽度（含外边距）</summary>
+    /// <summary>子项最小宽度（含外边距），实际宽度按列均分视口</summary>
     public double ItemWidth
     {
         get => (double)GetValue(ItemWidthProperty);
@@ -54,6 +55,7 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     {
         var itemCount = ItemCount;
         var columns = ColumnCount(availableSize.Width);
+        var itemWidth = availableSize.Width / columns;
         var rows = itemCount == 0 ? 0 : (itemCount + columns - 1) / columns;
 
         // 无限高测量的两种来源：滚动面板委托（ScrollOwner 非空，常态）与非滚动宿主（退化，全量实现化）。
@@ -63,7 +65,7 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
             : ScrollOwner is not null ? _viewport.Height
             : rows * ItemHeight;
 
-        _extent = new Size(columns * ItemWidth, rows * ItemHeight);
+        _extent = new Size(columns * itemWidth, rows * ItemHeight);
         _viewport = new Size(availableSize.Width, viewportHeight);
         SetVerticalOffset(_offset.Y); // 钳制偏移（窗口变宽后行数变少）
         ScrollOwner?.InvalidateScrollInfo();
@@ -98,7 +100,7 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
                         InsertInternalChild(childIndex, child);
                     generator.PrepareItemContainer(child);
                 }
-                child.Measure(new Size(ItemWidth, ItemHeight));
+                child.Measure(new Size(itemWidth, ItemHeight));
             }
         }
 
@@ -129,6 +131,7 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     protected override Size ArrangeOverride(Size finalSize)
     {
         var columns = ColumnCount(finalSize.Width);
+        var itemWidth = finalSize.Width / columns;
         var generator = ConcreteGenerator;
         for (var i = 0; i < InternalChildren.Count; i++)
         {
@@ -140,7 +143,7 @@ public class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
             var col = itemIndex % columns;
             // IScrollInfo 约定：ScrollContentPresenter 不替内容做滚动平移，
             // 偏移由面板在排列时自行扣除（少了这一步：一滚动可视区就空白）
-            child.Arrange(new Rect(col * ItemWidth, row * ItemHeight - _offset.Y, ItemWidth, ItemHeight));
+            child.Arrange(new Rect(col * itemWidth, row * ItemHeight - _offset.Y, itemWidth, ItemHeight));
         }
         return finalSize;
     }

@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="clr-namespace:HS2Tools.Controls">
 
     <Color x:Key="WindowBackgroundColor">#FFF5F7FB</Color>
     <Color x:Key="SidebarBackgroundColor">#FFFFFFFF</Color>
@@ -44,6 +45,7 @@
     <SolidColorBrush x:Key="OnAccentBrush" Color="{StaticResource OnAccentColor}"/>
 
     <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+    <controls:BoolToStarGridLengthConverter x:Key="BoolToStarGridLength"/>
 
     <Style x:Key="PageTitle" TargetType="TextBlock">
         <Setter Property="FontSize" Value="26"/>

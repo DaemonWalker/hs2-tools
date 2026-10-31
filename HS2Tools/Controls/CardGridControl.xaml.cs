@@ -93,7 +93,7 @@ public partial class CardGridControl : UserControl
         set => SetValue(CardKindProperty, value);
     }
 
-    /// <summary>卡片槽位宽（面板按固定尺寸布局）</summary>
+    /// <summary>卡片槽位最小宽（面板按可用宽度均分每列）</summary>
     public static readonly DependencyProperty CardItemWidthProperty = DependencyProperty.Register(
         nameof(CardItemWidth), typeof(double), typeof(CardGridControl), new PropertyMetadata(168.0));
 
