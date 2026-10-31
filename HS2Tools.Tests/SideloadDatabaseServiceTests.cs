@@ -66,6 +66,39 @@ public class SideloadDatabaseServiceTests : IDisposable
     }
 
     [Fact]
+    public void Update_MergesAndRetires_OnlyAfterTwoFullScans()
+    {
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, string> { ["g1"] = "a/g1.zipmod", ["g2"] = "a/g2.zipmod" });
+
+        // 第二轮：g2 未出现 → 合并保留（上一轮才见过，不误删）
+        db.Update(new Dictionary<string, string> { ["g1"] = "a/g1.zipmod", ["g3"] = "a/g3.zipmod" });
+        Assert.Equal(3, db.Database.Count);
+        Assert.True(db.Database.ContainsKey("g2"));
+
+        // 第三轮：g2 连续两轮完整扫描未见 → 淘汰；g3 上轮首见，本轮未见仍保留
+        db.Update(new Dictionary<string, string> { ["g1"] = "a/g1.zipmod" });
+        Assert.False(db.Database.ContainsKey("g2"));
+        Assert.True(db.Database.ContainsKey("g3"));
+        Assert.True(db.Database.ContainsKey("g1"));
+    }
+
+    [Fact]
+    public void Load_V1FlatFile_UpgradesToV2()
+    {
+        File.WriteAllText(SourcePath("hs2"),
+            JsonSerializer.Serialize(new Dictionary<string, string> { ["g1"] = "a/g1.zipmod" }));
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+
+        Assert.Equal("a/g1.zipmod", db.Database["g1"]);
+        var known = db.GetKnownMods();
+        Assert.Equal("g1", known["a/g1.zipmod"].Guid);
+        Assert.Null(known["a/g1.zipmod"].SizeText); // 指纹为空：下轮扫描重抓补齐
+    }
+
+    [Fact]
     public void Load_CorruptFile_FallsBackToBundled()
     {
         File.WriteAllText(SourcePath("hs2"), "not-json{");
@@ -188,7 +221,9 @@ public class SideloadDatabaseServiceTests : IDisposable
         using var config = NewConfig();
         var db = new SideloadDatabaseService(config);
         var changed = 0;
+        var metaChanged = 0;
         db.Changed += (_, _) => changed++;
+        db.MetaChanged += (_, _) => metaChanged++;
         var meta = new SideloadScanMeta
         {
             LastScanTime = new DateTime(2025, 1, 2, 3, 4, 0),
@@ -198,7 +233,8 @@ public class SideloadDatabaseServiceTests : IDisposable
 
         db.SaveMeta(meta);
 
-        Assert.Equal(1, changed); // 随 Changed 通知
+        Assert.Equal(1, metaChanged); // 随 MetaChanged 通知（不触发整表重建用的 Changed）
+        Assert.Equal(0, changed);
         Assert.True(File.Exists(MetaPath("hs2")));
         Assert.Equal(42, db.GetMeta()!.FoundCount); // 缓存命中
 

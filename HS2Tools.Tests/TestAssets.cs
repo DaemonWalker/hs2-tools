@@ -36,9 +36,10 @@ internal static class TestAssets
     private sealed class NoopSideloader : ISideloaderService
     {
         public bool IsRunning => false;
-        public Task<Dictionary<string, string>> RunAsync(
-            Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null) =>
-            Task.FromResult(new Dictionary<string, string>());
+        public Task<SideloadRunResult> RunAsync(
+            Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null,
+            IReadOnlyDictionary<string, KnownSideloadMod>? known = null) =>
+            Task.FromResult(new SideloadRunResult { Mods = new Dictionary<string, SideloadEntry>() });
         public void Cancel() { }
     }
 
@@ -482,6 +483,140 @@ internal static class TestAssets
         return path;
     }
 
+    /// <summary>
+    /// 手工构造 ZIP64 zipmod（Store manifest）：本地头与中央目录的 32 位大小/偏移均为哨兵
+    /// 0xFFFFFFFF，真值在 ZIP64 extra（0x0001）与 ZIP64 EOCD 中。
+    /// </summary>
+    public static byte[] BuildZip64ZipmodBytes(string guid)
+    {
+        var manifest = Encoding.UTF8.GetBytes(MakeManifest(guid));
+        var nameBytes = Encoding.UTF8.GetBytes("manifest.xml");
+
+        using var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
+
+        // 本地头：comp/uncomp 均为 ZIP64 哨兵（大小也应回退中央目录）
+        bw.Write(0x04034b50u);
+        bw.Write((ushort)45);            // version needed
+        bw.Write((ushort)0);             // flags
+        bw.Write((ushort)0);             // store
+        bw.Write(0u);                    // time + date
+        bw.Write(0u);                    // crc（解析器不校验）
+        bw.Write(0xFFFFFFFFu);           // compressed 哨兵
+        bw.Write(0xFFFFFFFFu);           // uncompressed 哨兵
+        bw.Write((ushort)nameBytes.Length);
+        bw.Write((ushort)0);             // 本地 extra 无
+        bw.Write(nameBytes);
+        bw.Write(manifest);
+
+        // 中央目录：大小/偏移均哨兵，真值在 ZIP64 extra
+        var cdOffset = ms.Position;
+        bw.Write(0x02014b50u);
+        bw.Write((ushort)45);            // made by
+        bw.Write((ushort)45);            // needed
+        bw.Write((ushort)0);
+        bw.Write((ushort)0);
+        bw.Write(0u);
+        bw.Write(0u);                    // crc
+        bw.Write(0xFFFFFFFFu);
+        bw.Write(0xFFFFFFFFu);
+        bw.Write((ushort)nameBytes.Length);
+        bw.Write((ushort)(4 + 24));      // extraLen：0x0001 + uncomp(8)+comp(8)+offset(8)
+        bw.Write((ushort)0);             // comment
+        bw.Write((ushort)0);             // disk
+        bw.Write((ushort)0);             // internal attr
+        bw.Write(0u);                    // external attr
+        bw.Write(0xFFFFFFFFu);           // local header offset 哨兵
+        bw.Write(nameBytes);
+        bw.Write((ushort)0x0001);
+        bw.Write((ushort)24);
+        bw.Write((long)manifest.Length); // uncompressed
+        bw.Write((long)manifest.Length); // compressed
+        bw.Write(0L);                    // local header offset
+        var cdSize = ms.Position - cdOffset;
+
+        // ZIP64 EOCD + locator + 全哨兵 EOCD
+        var zip64EocdOffset = ms.Position;
+        bw.Write(0x06064b50u);
+        bw.Write(44L);                   // record size
+        bw.Write((ushort)45);
+        bw.Write((ushort)45);
+        bw.Write(0u);
+        bw.Write(0u);
+        bw.Write(1L);                    // entries this disk
+        bw.Write(1L);                    // entries total
+        bw.Write(cdSize);
+        bw.Write(cdOffset);
+        bw.Write(0x07064b50u);
+        bw.Write(0u);
+        bw.Write(zip64EocdOffset);
+        bw.Write(1u);
+        bw.Write(0x06054b50u);
+        bw.Write((ushort)0);
+        bw.Write((ushort)0);
+        bw.Write((ushort)0xFFFF);
+        bw.Write((ushort)0xFFFF);
+        bw.Write(0xFFFFFFFFu);
+        bw.Write(0xFFFFFFFFu);
+        bw.Write((ushort)0);
+        bw.Flush();
+        return ms.ToArray();
+    }
+
+    /// <summary>手工构造 data descriptor zipmod：本地头大小为 0，真实大小仅在中央目录</summary>
+    public static byte[] BuildDataDescriptorZipmodBytes(string guid)
+    {
+        var manifest = Encoding.UTF8.GetBytes(MakeManifest(guid));
+        var nameBytes = Encoding.UTF8.GetBytes("manifest.xml");
+
+        using var ms = new MemoryStream();
+        var bw = new BinaryWriter(ms);
+
+        bw.Write(0x04034b50u);
+        bw.Write((ushort)20);
+        bw.Write((ushort)8);             // flags：bit 3 = data descriptor
+        bw.Write((ushort)0);             // store
+        bw.Write(0u);
+        bw.Write(0u);
+        bw.Write(0u);                    // 本地头 compressed = 0
+        bw.Write(0u);                    // 本地头 uncompressed = 0
+        bw.Write((ushort)nameBytes.Length);
+        bw.Write((ushort)0);
+        bw.Write(nameBytes);
+        bw.Write(manifest);
+
+        var cdOffset = ms.Position;
+        bw.Write(0x02014b50u);
+        bw.Write((ushort)20);
+        bw.Write((ushort)20);
+        bw.Write((ushort)8);
+        bw.Write((ushort)0);
+        bw.Write(0u);
+        bw.Write(0u);
+        bw.Write(manifest.Length);       // CD 中是真实大小
+        bw.Write(manifest.Length);
+        bw.Write((ushort)nameBytes.Length);
+        bw.Write((ushort)0);
+        bw.Write((ushort)0);
+        bw.Write((ushort)0);
+        bw.Write((ushort)0);
+        bw.Write(0u);
+        bw.Write(0u);                    // local header offset = 0
+        bw.Write(nameBytes);
+        var cdSize = ms.Position - cdOffset;
+
+        bw.Write(0x06054b50u);
+        bw.Write((ushort)0);
+        bw.Write((ushort)0);
+        bw.Write((ushort)1);
+        bw.Write((ushort)1);
+        bw.Write((uint)cdSize);
+        bw.Write((uint)cdOffset);
+        bw.Write((ushort)0);
+        bw.Flush();
+        return ms.ToArray();
+    }
+
     /// <summary>在内存中构建 zip，返回字节</summary>
     public static byte[] BuildZipBytes(params (string Name, byte[] Content, bool Deflate)[] entries)
     {
@@ -659,10 +794,22 @@ internal sealed class TestHttpServer : IDisposable
         }
 
         var rangeHeader = req.Headers["Range"];
-        var m = rangeHeader != null ? Regex.Match(rangeHeader, @"^bytes=(\d+)-(\d*)$") : null;
-        if (supportRange && m is { Success: true })
+        var m = rangeHeader != null ? Regex.Match(rangeHeader, @"^bytes=(\d*)-(\d*)$") : null;
+        if (supportRange && m is { Success: true } && (m.Groups[1].Value != "" || m.Groups[2].Value != ""))
         {
-            var start = long.Parse(m.Groups[1].Value);
+            long start, end;
+            if (m.Groups[1].Value == "")
+            {
+                // suffix range：bytes=-N，取最后 N 字节
+                var n = long.Parse(m.Groups[2].Value);
+                start = Math.Max(0, data.Length - n);
+                end = data.Length - 1;
+            }
+            else
+            {
+                start = long.Parse(m.Groups[1].Value);
+                end = m.Groups[2].Value == "" ? data.Length - 1 : long.Parse(m.Groups[2].Value);
+            }
             if (start >= data.Length)
             {
                 resp.StatusCode = 416;
@@ -671,7 +818,6 @@ internal sealed class TestHttpServer : IDisposable
                 resp.Close();
                 return;
             }
-            var end = m.Groups[2].Value == "" ? data.Length - 1 : long.Parse(m.Groups[2].Value);
             end = Math.Min(end, data.Length - 1);
             var len = (int)(end - start + 1);
             if (len < 0)

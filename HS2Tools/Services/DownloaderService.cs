@@ -14,11 +14,15 @@ public class DownloadCancelledException : Exception
 
 /// <summary>
 /// 断点续传下载器（Go internal/downloader 的 1:1 移植）。
-/// 无超时，靠 CancellationToken 取消；32KB 缓冲；进度节流 200ms 或 64KB。
+/// 无总时长超时，靠 CancellationToken 取消；读停滞 60s 中断（防连接挂死）；
+/// 32KB 缓冲；进度节流 200ms 或 64KB。
 /// </summary>
 public class DownloaderService
 {
     private const int BufferSize = 32 * 1024;
+
+    /// <summary>读停滞超时：超过该时长无任何数据即判定连接挂死</summary>
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
 
     private readonly HttpClient _client;
 
@@ -87,7 +91,7 @@ public class DownloaderService
         HttpResponseMessage resp;
         try
         {
-            resp = await _client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            resp = await _client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -99,7 +103,7 @@ public class DownloaderService
         {
             resp.Dispose();
             progress?.Report(new DownloadProgress { Type = DownloadMessageType.Info, Message = "Server rejected resume range, restarting download" });
-            await DownloadAsync(fileUrl, outputPath, resume: false, progress, ct);
+            await DownloadAsync(fileUrl, outputPath, resume: false, progress, ct).ConfigureAwait(false);
             return;
         }
 
@@ -141,17 +145,27 @@ public class DownloaderService
             }
 
             var tracker = new ProgressTracker(startPos, totalSize, progress);
+            using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             try
             {
-                await using var src = await resp.Content.ReadAsStreamAsync(ct);
+                await using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
 
                 var buf = new byte[BufferSize];
                 while (true)
                 {
-                    var n = await src.ReadAsync(buf, ct);
+                    stallCts.CancelAfter(StallTimeout); // 每次读前重置停滞计时（有数据即顺延）
+                    int n;
+                    try
+                    {
+                        n = await src.ReadAsync(buf, stallCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        throw new TimeoutException("下载停滞：60 秒未收到数据");
+                    }
                     if (n == 0)
                         break;
-                    await file.WriteAsync(buf.AsMemory(0, n), ct);
+                    await file.WriteAsync(buf.AsMemory(0, n), ct).ConfigureAwait(false);
                     tracker.Update(n);
                 }
             }

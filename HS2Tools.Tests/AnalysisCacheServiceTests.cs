@@ -79,9 +79,10 @@ public class AnalysisCacheServiceTests : IDisposable
     private sealed class NoopSideloader : ISideloaderService
     {
         public bool IsRunning => false;
-        public Task<Dictionary<string, string>> RunAsync(
-            Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null) =>
-            Task.FromResult(new Dictionary<string, string>());
+        public Task<SideloadRunResult> RunAsync(
+            Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null,
+            IReadOnlyDictionary<string, KnownSideloadMod>? known = null) =>
+            Task.FromResult(new SideloadRunResult { Mods = new Dictionary<string, SideloadEntry>() });
         public void Cancel() { }
     }
 }

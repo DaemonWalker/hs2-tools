@@ -11,6 +11,9 @@ public enum SideloadScanStatus
 
     /// <summary>异常终止</summary>
     Error,
+
+    /// <summary>部分失败（空结果或存在抓取失败）：已保留旧库不覆盖</summary>
+    PartialFailure,
 }
 
 /// <summary>
@@ -24,8 +27,11 @@ public class SideloadScanMeta
 
     public SideloadScanStatus Status { get; set; }
 
-    /// <summary>发现的 Mod 数（停止时为已发现的部分结果数；异常时为 0）</summary>
+    /// <summary>发现的 Mod 数（停止/部分失败时为已发现的部分结果数；异常时为 0）</summary>
     public int FoundCount { get; set; }
+
+    /// <summary>抓取失败数（目录页 + Mod；仅 Status = PartialFailure 时有值）</summary>
+    public int FailedCount { get; set; }
 
     /// <summary>异常原因（仅 Status = Error 时有值）</summary>
     public string? Error { get; set; }

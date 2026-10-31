@@ -13,19 +13,25 @@ public static class ErrorLog
     private static string LogPath =>
         Path.Combine(DirectoryOverride ?? ConfigService.DefaultConfigDir, "error.log");
 
+    /// <summary>写串行化：爬虫 10 并发同时 AppendAllText 会互相冲突（异常被吞 → 日志丢失）</summary>
+    private static readonly object Sync = new();
+
     public static void Log(Exception ex) => Write(ex.ToString());
 
     public static void Log(string message) => Write(message);
 
     private static void Write(string content)
     {
-        try
+        lock (Sync)
         {
-            File.AppendAllText(LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {content}\n\n");
-        }
-        catch
-        {
-            // 日志失败不二次抛错
+            try
+            {
+                File.AppendAllText(LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {content}\n\n");
+            }
+            catch
+            {
+                // 日志失败不二次抛错
+            }
         }
     }
 }

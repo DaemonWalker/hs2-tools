@@ -81,6 +81,7 @@ public partial class SideloadWindowViewModel : ObservableObject
         _downloads.TaskProgress += (_, t) => UiDispatch.Run(() => UpdateItemStatus(t));
         _downloads.TaskFinished += (_, t) => UiDispatch.Run(() => UpdateItemStatus(t));
         _sideloadDb.Changed += (_, _) => UiDispatch.Run(Reload);
+        _sideloadDb.MetaChanged += (_, _) => UiDispatch.Run(() => OnPropertyChanged(nameof(LastScanText)));
         _config.Changed += (_, _) => UiDispatch.Run(Reload);
     }
 
@@ -114,6 +115,7 @@ public partial class SideloadWindowViewModel : ObservableObject
             {
                 SideloadScanStatus.Success => $"上次扫描：{time}（成功结束，发现 {meta.FoundCount} 个 Mods）",
                 SideloadScanStatus.Stopped => $"上次扫描：{time}（已停止，已发现 {meta.FoundCount} 个）",
+                SideloadScanStatus.PartialFailure => $"上次扫描：{time}（部分失败 {meta.FailedCount} 处，已保留旧数据；本轮发现 {meta.FoundCount} 个）",
                 _ => $"上次扫描：{time}（异常终止：{meta.Error}）",
             };
         }
@@ -156,9 +158,14 @@ public partial class SideloadWindowViewModel : ObservableObject
         var db = _sideloadDb.Database;
         var localMods = _config.Settings.Current.LocalMods;
 
+        // 任务快照取一次并建索引：避免每行 FindTask 都 _tasks.Values.ToList()（12k 行 = 12k 次分配）
+        var tasksById = new Dictionary<string, DownloadTask>();
+        foreach (var t in _downloads.Tasks)
+            tasksById[t.Id] = t;
+
         _all = db.Select(kv =>
         {
-            var task = FindTask(kv.Key);
+            tasksById.TryGetValue(kv.Key, out var task);
             return new SideloadItemViewModel
             {
                 Guid = kv.Key,

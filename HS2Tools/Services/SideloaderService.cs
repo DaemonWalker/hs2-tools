@@ -9,12 +9,14 @@ using HtmlAgilityPack;
 namespace HS2Tools.Services;
 
 /// <summary>
-/// Sideload 爬虫（Go internal/sideloader 的 1:1 移植）。
-/// 爬取 BetterRepack autoindex 目录列表，对每个远程 zipmod 只发 3~18 次 HTTP Range 小请求提取 GUID。
-/// 爬虫从起始 URL 递归下钻全部子目录（ParseLinks 分流目录/mod，目录级并发 3），
+/// Sideload 爬虫（Go internal/sideloader 移植，含更新可靠性/性能修复）。
+/// 爬取 BetterRepack autoindex 目录列表，对每个远程 zipmod 只发 1~7 次 HTTP Range 小请求提取 GUID
+/// （suffix range 首请求省 HEAD、尾部窗口几何扩窗、本地头+manifest 合并请求）。
+/// 爬虫从起始 URL 递归下钻全部子目录（ParseLinks 分流目录/mod，目录级全局并发 3），
 /// 因此 KKEC 根目录（其下是多个 "Sideloader Modpack*" 子目录）与 AISHS2 用同一套逻辑即可覆盖，
 /// 各游戏仅起点 baseUrl 不同（见 GameProfiles.*.SideloadBaseUrl，唯一事实来源）。
-/// Run 可重入（每次运行新建内部状态）；Cancel 只置标志位（已发出的请求不中断）。
+/// Run 可重入（每次运行新建内部状态）；Cancel 置标志位 + CancellationToken（在飞请求即时中断）。
+/// 服务层 await 一律 ConfigureAwait(false)：ZIP/HTML 解析等续体不回 WPF UI 线程。
 /// </summary>
 public class SideloaderService : ISideloaderService
 {
@@ -24,7 +26,7 @@ public class SideloaderService : ISideloaderService
     /// <summary>小文件阈值：≤64KB 直接整取</summary>
     private const long SmallFileThreshold = 65536;
 
-    /// <summary>渐进抓取块大小 16KB / 窗口上限 256KB</summary>
+    /// <summary>渐进抓取首块 16KB（窗口几何翻倍）/ 窗口上限 256KB</summary>
     private const long ChunkSize = 16384;
     private const long MaxWindow = 262144;
 
@@ -37,17 +39,36 @@ public class SideloaderService : ISideloaderService
     private sealed class RunState
     {
         public bool Cancelled;
-        public readonly Dictionary<string, string> Result = new();
+        public readonly CancellationTokenSource Cts = new();
+        public readonly Dictionary<string, SideloadEntry> Result = new();
         public readonly object ResultLock = new();
         public readonly SemaphoreSlim ModSem = new(10);
+
+        /// <summary>旧库条目（按相对路径索引）：路径+大小+时间未变的 Mod 零请求复用</summary>
+        public IReadOnlyDictionary<string, KnownSideloadMod>? Known;
+
+        /// <summary>目录级并发必须全局唯一：此前每层递归各建一个 SemaphoreSlim(3)，
+        /// 实际并发随深度相乘（3^深度），与"目录级并发 3"不符且易触发服务端连接重置。</summary>
+        public readonly SemaphoreSlim DirSem = new(3);
         public Action<string>? Log;
+
+        // 失败/跳过计数（多线程 Interlocked）：供 A 策略判断本轮是否可覆盖旧库
+        public int FailedPages;
+        public int FailedMods;
+        public int SkippedNoGuid;
+        public int SkippedTooLarge;
+        public int NotFoundMods;
+        public int ReusedMods;
+        public int Processed;
     }
 
     /// <param name="proxy">代理串（含认证），解析失败时忽略（与原版一致）</param>
     /// <param name="baseUrl">起始 URL（各游戏不同，见 GameProfiles.SideloadBaseUrl；空则回退 HS2）</param>
     public SideloaderService(string? proxy = null, string? baseUrl = null)
     {
-        var handler = new HttpClientHandler();
+        // SocketsHttpHandler：EnableMultipleHttp2Connections 避免单条 h2 连接断开时
+        // 十几个并发请求一起失败（HttpClientHandler 不暴露该属性）
+        var handler = new SocketsHttpHandler { EnableMultipleHttp2Connections = true };
         if (!string.IsNullOrEmpty(proxy))
             handler.Proxy = ProxyHelper.BuildProxyOrNull(proxy);
         else
@@ -69,19 +90,24 @@ public class SideloaderService : ISideloaderService
         get { lock (_runLock) return _currentRun != null; }
     }
 
-    /// <summary>取消爬取（只置标志位，已发出的请求不中断——与原版一致）</summary>
+    /// <summary>取消爬取：置标志位 + 取消 CancellationToken（在飞请求与信号量等待即时中断）</summary>
     public void Cancel()
     {
+        RunState? run;
         lock (_runLock)
         {
-            if (_currentRun != null)
-                _currentRun.Cancelled = true;
+            run = _currentRun;
+            if (run != null)
+                run.Cancelled = true;
         }
+        run?.Cts.Cancel();
     }
 
-    /// <summary>运行爬取。已在运行时抛 InvalidOperationException（对应原版 "sideloader is already running"）</summary>
-    public async Task<Dictionary<string, string>> RunAsync(
-        Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null)
+    /// <summary>运行爬取。已在运行时抛 InvalidOperationException（对应原版 "sideloader is already running"）。
+    /// known 为旧库条目（按相对路径索引）：路径+大小+时间未变的 Mod 零请求复用（增量爬取）。</summary>
+    public async Task<SideloadRunResult> RunAsync(
+        Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null,
+        IReadOnlyDictionary<string, KnownSideloadMod>? known = null)
     {
         RunState run;
         lock (_runLock)
@@ -95,20 +121,40 @@ public class SideloaderService : ISideloaderService
         try
         {
             run.Log = onLog;
+            run.Known = known;
             onLog?.Invoke($"Starting crawl from {_baseUrl}");
-            await CrawlAsync(_baseUrl, run, onLog, onProgress);
+            try
+            {
+                await CrawlAsync(_baseUrl, run, onLog, onProgress).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (run.Cancelled)
+            {
+                // 用户停止：信号量等待/请求被 CT 中断，走正常返回（部分结果由调用方决定丢弃）
+            }
             int count;
             lock (run.ResultLock)
                 count = run.Result.Count;
             onLog?.Invoke($"Crawl completed, found {count} mods");
 
+            Dictionary<string, SideloadEntry> mods;
             lock (run.ResultLock)
-                return new Dictionary<string, string>(run.Result);
+                mods = new Dictionary<string, SideloadEntry>(run.Result);
+            return new SideloadRunResult
+            {
+                Mods = mods,
+                ReusedMods = run.ReusedMods,
+                FailedPages = run.FailedPages,
+                FailedMods = run.FailedMods,
+                SkippedNoGuid = run.SkippedNoGuid,
+                SkippedTooLarge = run.SkippedTooLarge,
+                NotFoundMods = run.NotFoundMods,
+            };
         }
         finally
         {
             lock (_runLock)
                 _currentRun = null;
+            run.Cts.Dispose();
         }
     }
 
@@ -124,11 +170,12 @@ public class SideloaderService : ISideloaderService
         HtmlDocument? doc;
         try
         {
-            doc = await FetchDocAsync(pageUrl);
+            doc = await FetchDocAsync(pageUrl, run).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            // 原版静默返回；迁移约定：至少记日志
+            // 原版静默返回；迁移约定：至少记日志。目录失败 = 整棵子树缺失，计数供 A 策略保留旧库
+            Interlocked.Increment(ref run.FailedPages);
             onLog?.Invoke($"Failed to fetch {pageUrl}: {ex.Message}");
             return;
         }
@@ -141,55 +188,90 @@ public class SideloaderService : ISideloaderService
         {
             if (run.Cancelled)
                 break;
-            await run.ModSem.WaitAsync();
+            await run.ModSem.WaitAsync(run.Cts.Token).ConfigureAwait(false);
             modTasks.Add(ProcessModAsync(mod));
         }
-        await Task.WhenAll(modTasks);
+        await Task.WhenAll(modTasks).ConfigureAwait(false);
 
-        // 目录级并发 3
-        var dirSem = new SemaphoreSlim(3);
+        // 目录级并发 3（全局信号量，见 RunState.DirSem）
         var dirTasks = new List<Task>();
         foreach (var dir in dirs)
         {
             if (run.Cancelled)
                 break;
-            await dirSem.WaitAsync();
+            await run.DirSem.WaitAsync(run.Cts.Token).ConfigureAwait(false);
             dirTasks.Add(CrawlDirAsync(dir));
         }
-        await Task.WhenAll(dirTasks);
+        await Task.WhenAll(dirTasks).ConfigureAwait(false);
 
         return;
 
-        async Task ProcessModAsync(string modUrl)
+        async Task ProcessModAsync(AutoindexMod mod)
         {
+            var relative = mod.Url.StartsWith(_baseUrl, StringComparison.Ordinal)
+                ? mod.Url[_baseUrl.Length..]
+                : mod.Url;
             try
             {
-                var guid = await ExtractGuidFromZipmodAsync(modUrl, run);
+                // 增量爬取：路径+大小+时间都未变 → 零请求沿用旧 GUID。
+                // 指纹任一缺失则保守回退正常抓取（退化为全量，不会漏 Mod）
+                if (run.Known != null && run.Known.TryGetValue(relative, out var known)
+                    && known.SizeText != null && known.MtimeText != null
+                    && known.SizeText == mod.SizeText && known.MtimeText == mod.MtimeText)
+                {
+                    Interlocked.Increment(ref run.ReusedMods);
+                    AddResult(known.Guid);
+                    return;
+                }
+
+                var (outcome, guid) = await ExtractGuidFromZipmodAsync(mod.Url, run).ConfigureAwait(false);
+                switch (outcome)
+                {
+                    case ModOutcome.Failed:
+                        Interlocked.Increment(ref run.FailedMods);
+                        break;
+                    case ModOutcome.NotFound:
+                        Interlocked.Increment(ref run.NotFoundMods);
+                        break;
+                    case ModOutcome.NoGuid:
+                        Interlocked.Increment(ref run.SkippedNoGuid);
+                        break;
+                    case ModOutcome.TooLarge:
+                        Interlocked.Increment(ref run.SkippedTooLarge);
+                        break;
+                }
+
                 if (guid != "")
-                {
-                    int count;
-                    lock (run.ResultLock)
-                    {
-                        run.Result[guid] = modUrl.StartsWith(_baseUrl, StringComparison.Ordinal)
-                            ? modUrl[_baseUrl.Length..]
-                            : modUrl;
-                        count = run.Result.Count;
-                    }
-                    onLog?.Invoke($"Found: {guid}");
-                    onProgress?.Report(new SideloaderProgress(count, 0));
-                }
+                    AddResult(guid);
                 else
-                {
-                    int count;
-                    lock (run.ResultLock)
-                        count = run.Result.Count;
-                    onLog?.Invoke($"Skipping {modUrl}: no GUID extracted");
-                    onProgress?.Report(new SideloaderProgress(count, 0));
-                }
+                    onLog?.Invoke($"Skipping {mod.Url}: {outcome}");
             }
             finally
             {
                 run.ModSem.Release();
+                var processed = Interlocked.Increment(ref run.Processed);
+                int current;
+                lock (run.ResultLock)
+                    current = run.Result.Count;
+                onProgress?.Report(new SideloaderProgress(current, 0, processed, run.FailedPages + run.FailedMods));
+            }
+
+            void AddResult(string guid)
+            {
+                lock (run.ResultLock)
+                {
+                    // 重复 GUID 确定性裁决：相对路径字典序较小者胜。
+                    // 原"后写覆盖"由并发完成顺序决定，同一批 Mod 不同次爬取会被整理归位到不同目录
+                    if (!run.Result.TryGetValue(guid, out var existing)
+                        || string.CompareOrdinal(relative, existing.Url) < 0)
+                        run.Result[guid] = new SideloadEntry
+                        {
+                            Url = relative,
+                            SizeText = mod.SizeText,
+                            MtimeText = mod.MtimeText,
+                        };
+                }
+                onLog?.Invoke($"Found: {guid}");
             }
         }
 
@@ -197,35 +279,87 @@ public class SideloaderService : ISideloaderService
         {
             try
             {
-                await CrawlAsync(dirUrl, run, onLog, onProgress);
+                await CrawlAsync(dirUrl, run, onLog, onProgress).ConfigureAwait(false);
             }
             finally
             {
-                dirSem.Release();
+                run.DirSem.Release();
             }
         }
     }
 
-    private async Task<HtmlDocument> FetchDocAsync(string pageUrl)
+    /// <summary>单个 Mod 的抓取结局（404 视为远端已删除、自然淘汰，不算失败）</summary>
+    private enum ModOutcome { Ok, NotFound, Failed, NoGuid, TooLarge }
+
+    /// <summary>
+    /// 瞬时失败（超时/连接重置/429/5xx）最多 3 次、500ms 起指数退避重试；
+    /// 404 等确定性状态不重试。请求消息每次重建（已发送的 HttpRequestMessage 不可复用）。
+    /// 重试耗尽返回 null（已记日志）；非重试类响应原样返回给调用方判断。
+    /// </summary>
+    private async Task<HttpResponseMessage?> SendWithRetryAsync(
+        RunState run, Func<HttpRequestMessage> newRequest, string logContext,
+        HttpCompletionOption completion = HttpCompletionOption.ResponseContentRead)
     {
-        using var req = NewRequest(HttpMethod.Get, pageUrl);
-        req.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
-        using var resp = await _client.SendAsync(req);
+        const int maxAttempts = 3;
+        for (var attempt = 1; ; attempt++)
+        {
+            HttpResponseMessage? resp = null;
+            try
+            {
+                using var req = newRequest();
+                resp = await _client.SendAsync(req, completion, run.Cts.Token).ConfigureAwait(false);
+                if ((int)resp.StatusCode is 429 or >= 500 && attempt < maxAttempts && !run.Cancelled)
+                {
+                    resp.Dispose();
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * (1 << (attempt - 1))), run.Cts.Token).ConfigureAwait(false);
+                    continue;
+                }
+                return resp;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException
+                                       or OperationCanceledException)
+            {
+                resp?.Dispose();
+                if (attempt >= maxAttempts || run.Cancelled)
+                {
+                    if (!run.Cancelled) // 用户停止不记失败日志（非错误）
+                        run.Log?.Invoke($"Failed {logContext}: {ex.Message}");
+                    return null;
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * (1 << (attempt - 1))), run.Cts.Token).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task<HtmlDocument> FetchDocAsync(string pageUrl, RunState run)
+    {
+        using var resp = await SendWithRetryAsync(run, () =>
+        {
+            var req = NewRequest(HttpMethod.Get, pageUrl);
+            req.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
+            return req;
+        }, pageUrl).ConfigureAwait(false) ?? throw new HttpRequestException("request failed after retries");
         if (resp.StatusCode != HttpStatusCode.OK)
             throw new HttpRequestException($"HTTP {(int)resp.StatusCode}");
-        var html = await resp.Content.ReadAsStringAsync();
+        var html = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
         return doc;
     }
 
+    /// <summary>autoindex 列表行中的 zipmod：URL + 大小/修改时间列原文（增量指纹，仅做相等比对）</summary>
+    internal sealed record AutoindexMod(string Url, string? SizeText, string? MtimeText);
+
     /// <summary>
     /// 解析 autoindex 页面链接（对应 Go parseLinks）。
     /// table#indexlist tr 跳过前 2 行；href 解码后拼 pageURL 去重；.zipmod 与目录分流。
+    /// 同时取每行的大小/修改时间列（class 含 size/date，或 h5ai 经典 Name/Date/Size 列序），
+    /// 取不到则为 null（增量比对会保守回退为正常抓取）。
     /// </summary>
-    internal static (List<string> Dirs, List<string> Mods) ParseLinks(HtmlDocument doc, string pageUrl)
+    internal static (List<string> Dirs, List<AutoindexMod> Mods) ParseLinks(HtmlDocument doc, string pageUrl)
     {
         var hrefSet = new HashSet<string>();
+        var modList = new List<AutoindexMod>();
         var rows = doc.DocumentNode.SelectNodes("//table[@id='indexlist']//tr");
         if (rows != null)
         {
@@ -236,6 +370,29 @@ public class SideloaderService : ISideloaderService
                 var links = rows[i].SelectNodes(".//a");
                 if (links == null)
                     continue;
+
+                string? sizeText = null, mtimeText = null;
+                var cells = rows[i].SelectNodes("./td");
+                if (cells != null)
+                {
+                    foreach (var td in cells)
+                    {
+                        var cls = td.Attributes["class"]?.Value ?? "";
+                        if (cls.Contains("date", StringComparison.OrdinalIgnoreCase))
+                            mtimeText = td.InnerText.Trim();
+                        else if (cls.Contains("size", StringComparison.OrdinalIgnoreCase))
+                            sizeText = td.InnerText.Trim();
+                    }
+                    // 无 class 标记时按 h5ai 经典 Name/Date/Size 列序回退（末两列）
+                    if (mtimeText == null && sizeText == null && cells.Count >= 3)
+                    {
+                        mtimeText = cells[^2].InnerText.Trim();
+                        sizeText = cells[^1].InnerText.Trim();
+                    }
+                    if (sizeText == "") sizeText = null;
+                    if (mtimeText == "") mtimeText = null;
+                }
+
                 foreach (var a in links)
                 {
                     var href = a.Attributes["href"]?.Value;
@@ -244,7 +401,9 @@ public class SideloaderService : ISideloaderService
                     string decoded;
                     try
                     {
-                        decoded = Uri.UnescapeDataString(href);
+                        // HAP 的 Attribute.Value 保留 HTML 实体（如 Nonna &amp; Clara/），
+                        // 不解实体直接拼 URL 会 404，整棵子树丢失。先实体解码再 URI 解码。
+                        decoded = Uri.UnescapeDataString(WebUtility.HtmlDecode(href));
                     }
                     catch
                     {
@@ -255,21 +414,20 @@ public class SideloaderService : ISideloaderService
                     // 目录/文件名可含 URI 结构字符（如 KKEC 的 #KK_MaterialEditor 目录，href 为 %23KK_MaterialEditor/）。
                     // 解码后直接拼接，# 会被 Uri 当作 fragment 截断：实际请求落到父目录，ParseLinks 又解析出
                     // 同一链接 → 无限递归。拼回 URL 前把 # / ? 转义还原（等价于服务器 href 的原始编码形态）。
-                    hrefSet.Add(pageUrl + decoded.Replace("#", "%23").Replace("?", "%3F"));
+                    var url = pageUrl + decoded.Replace("#", "%23").Replace("?", "%3F");
+                    if (hrefSet.Add(url) && url.EndsWith(".zipmod", StringComparison.OrdinalIgnoreCase))
+                        modList.Add(new AutoindexMod(url, sizeText, mtimeText));
                 }
             }
         }
 
         var dirs = new List<string>();
-        var mods = new List<string>();
         foreach (var href in hrefSet)
         {
-            if (href.EndsWith(".zipmod", StringComparison.OrdinalIgnoreCase))
-                mods.Add(href);
-            else if (href.EndsWith("/", StringComparison.Ordinal))
+            if (href.EndsWith("/", StringComparison.Ordinal))
                 dirs.Add(href);
         }
-        return (dirs, mods);
+        return (dirs, modList);
     }
 
     // ==================== HTTP 小请求 ====================
@@ -290,49 +448,88 @@ public class SideloaderService : ISideloaderService
 
     private async Task<byte[]?> FetchRangeAsync(string modUrl, long start, long end, RunState run)
     {
-        try
+        using var resp = await SendWithRetryAsync(run, () =>
         {
-            using var req = NewRequest(HttpMethod.Get, modUrl);
+            var req = NewRequest(HttpMethod.Get, modUrl);
             req.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
             req.Headers.Range = new RangeHeaderValue(start, end);
             req.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
-            using var resp = await _client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
-
-            if (resp.StatusCode == HttpStatusCode.PartialContent)
-                return await resp.Content.ReadAsByteArrayAsync();
-
-            if (resp.StatusCode == HttpStatusCode.OK && start == 0)
-            {
-                // 整文件请求（小文件分支）：200 即为全量内容（≤64KB，内存有界）
-                return await resp.Content.ReadAsByteArrayAsync();
-            }
-
-            // Range 被忽略（200 且非整取）：视为失败。
-            // 若按原版照单全收，渐进抓取会把全量文件反复前插累积（16×文件×10 并发 → 数 GB）。
-            // 正常支持 Range 的站点（nginx/Cloudflare）恒返回 206，此分支仅在代理干预时触发。
+            return req;
+        }, $"range {modUrl}", HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+        if (resp is null)
             return null;
-        }
-        catch (Exception ex)
+
+        if (resp.StatusCode == HttpStatusCode.PartialContent)
+            return await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+
+        if (resp.StatusCode == HttpStatusCode.OK && start == 0)
         {
-            run.Log?.Invoke($"Failed to fetch range {modUrl}: {ex.Message}");
-            return null; // 原版忽略 fetchRange 错误
+            // 整文件请求（小文件分支）：200 即为全量内容（≤64KB，内存有界）
+            return await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
         }
+
+        // Range 被忽略（200 且非整取）：视为失败。
+        // 若按原版照单全收，渐进抓取会把全量文件反复前插累积（16×文件×10 并发 → 数 GB）。
+        // 正常支持 Range 的站点（nginx/Cloudflare）恒返回 206，此分支仅在代理干预时触发。
+        return null;
     }
 
-    private async Task<long?> GetFileSizeAsync(string modUrl, RunState run)
+    /// <summary>
+    /// 首请求：suffix range（bytes=-N）一次拿到尾部窗口与总大小，省掉 HEAD。
+    /// 206 → 总大小取自 Content-Range；200（小文件或服务器忽略 Range）→ 仅当 Content-Length
+    /// ≤64KB 才整收（防代理忽略 Range 时把大文件整个读进内存）；404/410 → NotFound（自然淘汰）。
+    /// </summary>
+    private async Task<(ModOutcome Outcome, byte[]? Data, long TotalSize)> FetchTailAsync(
+        string modUrl, long suffixLength, RunState run)
     {
+        using var resp = await SendWithRetryAsync(run, () =>
+        {
+            var req = NewRequest(HttpMethod.Get, modUrl);
+            req.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
+            req.Headers.Range = new RangeHeaderValue(null, suffixLength);
+            req.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
+            return req;
+        }, $"tail {modUrl}", HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+        if (resp is null)
+            return (ModOutcome.Failed, null, 0);
+        if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone)
+            return (ModOutcome.NotFound, null, 0);
+
         try
         {
-            using var req = NewRequest(HttpMethod.Head, modUrl);
-            req.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
-            using var resp = await _client.SendAsync(req);
-            // 原版：ParseInt 头缺失/非法 → error → 返回 ""
-            return resp.Content.Headers.ContentLength;
+            if (resp.StatusCode == HttpStatusCode.PartialContent)
+            {
+                var total = resp.Content.Headers.ContentRange?.Length;
+                if (total is null or <= 0)
+                {
+                    run.Log?.Invoke($"Failed to parse Content-Range {modUrl}");
+                    return (ModOutcome.Failed, null, 0);
+                }
+                var data = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                return (ModOutcome.Ok, data, total.Value);
+            }
+
+            if (resp.StatusCode == HttpStatusCode.OK)
+            {
+                var length = resp.Content.Headers.ContentLength;
+                if (length is > 0 and <= SmallFileThreshold)
+                {
+                    // 小文件：200 即为全量内容（内存有界）
+                    var data = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                    return (ModOutcome.Ok, data, length.Value);
+                }
+                // 大文件 200 全量（Range 被忽略）：拒绝整收，防内存累积
+                run.Log?.Invoke($"Skipping {modUrl}: server ignored suffix range (HTTP 200, length={length})");
+                return (ModOutcome.Failed, null, 0);
+            }
+
+            run.Log?.Invoke($"Failed to fetch tail {modUrl}: HTTP {(int)resp.StatusCode}");
+            return (ModOutcome.Failed, null, 0);
         }
         catch (Exception ex)
         {
-            run.Log?.Invoke($"Failed to get file size {modUrl}: {ex.Message}");
-            return null;
+            run.Log?.Invoke($"Failed to fetch tail {modUrl}: {ex.Message}");
+            return (ModOutcome.Failed, null, 0);
         }
     }
 
@@ -341,47 +538,53 @@ public class SideloaderService : ISideloaderService
     /// <summary>manifest 压缩数据上限：真实 manifest.xml 仅几 KB，超过即视为解析异常</summary>
     private const uint MaxManifestCompressedSize = 4 * 1024 * 1024;
 
-    private async Task<string> ExtractGuidFromZipmodAsync(string modUrl, RunState run)
+    private async Task<(ModOutcome Outcome, string Guid)> ExtractGuidFromZipmodAsync(string modUrl, RunState run)
     {
-        var size = await GetFileSizeAsync(modUrl, run);
-        if (size is null)
-            return "";
-        var totalSize = size.Value;
+        // 首请求 suffix range：一次拿到尾部 16KB 窗口与总大小（Content-Range），省掉 HEAD
+        var (outcome, tail, totalSize) = await FetchTailAsync(modUrl, ChunkSize, run).ConfigureAwait(false);
+        if (outcome != ModOutcome.Ok)
+            return (outcome, "");
 
-        byte[]? data;
-        byte[]? wholeFile = null;
-        if (totalSize <= SmallFileThreshold)
+        byte[]? data = tail;
+        // 尾部窗口已覆盖全文件（≤16KB，或服务器 200 整取的小文件）：后续全部内存切片
+        byte[]? wholeFile = data != null && data.Length == totalSize ? data : null;
+
+        if (wholeFile == null && totalSize <= SmallFileThreshold)
         {
-            data = await FetchRangeAsync(modUrl, 0, totalSize - 1, run);
-            // 小文件已完整在内存：后续本地头/manifest 直接切片，不再发请求
+            // 小文件（16KB < size ≤ 64KB）：整取一次，后续本地头/manifest 直接切片，不再发请求
+            data = await FetchRangeAsync(modUrl, 0, totalSize - 1, run).ConfigureAwait(false);
             if (data != null && data.Length == totalSize)
                 wholeFile = data;
         }
-        else
+
+        var entries = ZipRemoteReader.ReadCentralDir(data, totalSize);
+        if (entries != null)
+            return await ExtractFromEntriesAsync(entries, modUrl, run, wholeFile).ConfigureAwait(false);
+
+        // 大文件：尾部窗口按 16→32→64→128→256KB 几何增长（每次新抓 chunk = 当前窗口大小，
+        // 到 256KB 上限仅需 5 次请求，原 16KB 线性递增需 16 次）；新 chunk 前插累积
+        if (wholeFile == null && data != null)
         {
-            data = null;
-            // 从尾部按 16KB 递增抓取（最多 256KB 窗口），新 chunk 前插累积，逐步尝试解析中央目录
-            for (long offset = 0; offset < MaxWindow && offset < totalSize; offset += ChunkSize)
+            long window = data.Length;
+            while (window < MaxWindow && window < totalSize)
             {
-                var end = totalSize - offset - 1;
-                var start = end - ChunkSize + 1;
-                if (start < 0)
-                    start = 0;
-                var chunk = await FetchRangeAsync(modUrl, start, end, run);
-                data = Prepend(chunk, data);
-                var entries = ZipRemoteReader.ReadCentralDir(data, totalSize);
+                var chunkSize = Math.Min(window, MaxWindow - window);
+                var end = totalSize - window - 1;
+                var start = Math.Max(end - chunkSize + 1, 0);
+                var chunk = await FetchRangeAsync(modUrl, start, end, run).ConfigureAwait(false);
+                if (chunk == null)
+                    return (ModOutcome.Failed, "");
+                data = Prepend(chunk, data)!; // chunk 非 null 时 Prepend 必非 null
+                window = data.Length;
+                entries = ZipRemoteReader.ReadCentralDir(data, totalSize);
                 if (entries != null)
-                    return await ExtractFromEntriesAsync(entries, modUrl, run);
+                    return await ExtractFromEntriesAsync(entries, modUrl, run).ConfigureAwait(false);
             }
         }
 
         if (data == null || data.Length == 0)
-            return "";
-
-        var finalEntries = ZipRemoteReader.ReadCentralDir(data, totalSize);
-        if (finalEntries != null)
-            return await ExtractFromEntriesAsync(finalEntries, modUrl, run, wholeFile);
-        return "";
+            return (ModOutcome.Failed, "");
+        return (ModOutcome.NoGuid, "");
     }
 
     /// <summary>新 chunk 前插累积（对应 Go data = append(chunk, data...)）</summary>
@@ -397,7 +600,7 @@ public class SideloaderService : ISideloaderService
         return combined;
     }
 
-    private async Task<string> ExtractFromEntriesAsync(
+    private async Task<(ModOutcome Outcome, string Guid)> ExtractFromEntriesAsync(
         Dictionary<string, ZipEntryInfo> entries, string modUrl, RunState run, byte[]? wholeFile = null)
     {
         // 大小写不敏感找 manifest.xml
@@ -411,42 +614,42 @@ public class SideloaderService : ISideloaderService
             }
         }
         if (entry == null)
-            return "";
+            return (ModOutcome.NoGuid, "");
 
-        // 对本地文件头偏移再发 Range（201 字节）；小文件已在内存则直接切片
-        var headerStart = (int)entry.Offset;
-        byte[]? headerData = wholeFile != null && headerStart < wholeFile.Length
-            ? wholeFile[headerStart..Math.Min(headerStart + 201, wholeFile.Length)]
-            : null;
-        headerData ??= await FetchRangeAsync(modUrl, entry.Offset, entry.Offset + 200, run);
-        long dataOffset;
-        uint compressedSize;
-        if (ZipRemoteReader.TryParseLocalHeader(headerData, out var parsedOffset, out var parsedSize))
-        {
-            dataOffset = parsedOffset;
-            compressedSize = parsedSize;
-        }
-        else
-        {
-            // 解析失败回退 30 + nameLen（假设无 extra）
-            dataOffset = 30 + entry.NameByteLength;
-            compressedSize = entry.CompressedSize;
-        }
+        // 大小统一以中央目录为准（本地头 size 可能是 0=data descriptor 或 ZIP64 哨兵）；
+        // 本地头仅用于计算 dataOffset
+        var compressedSize = entry.CompressedSize;
 
         // 防御：压缩大小异常（CD 解析错位或畸形文件）时若直接抓取/解压会撑爆内存
         if (compressedSize > MaxManifestCompressedSize)
         {
             run.Log?.Invoke($"Skipping {modUrl}: manifest compressed size {compressedSize} exceeds limit");
-            return "";
+            return (ModOutcome.TooLarge, "");
         }
+        if (compressedSize <= 0)
+            return (ModOutcome.NoGuid, "");
 
-        var actualOffset = entry.Offset + dataOffset;
-        var dataStart = (int)actualOffset;
-        byte[]? manifestData = wholeFile != null && dataStart < wholeFile.Length
-            ? wholeFile[dataStart..Math.Min(dataStart + (int)compressedSize, wholeFile.Length)]
-            : null;
-        manifestData ??= await FetchRangeAsync(modUrl, actualOffset, actualOffset + compressedSize - 1, run);
-        return ZipRemoteReader.ExtractManifestGuid(manifestData, entry.CompressionMethod) ?? "";
+        // 一次合并 Range 取「本地头 + 数据区」（本地 extra 预留 512B；小文件直接内存切片），
+        // 比原来「201B 本地头 + manifest 数据」两次请求减半；数据不全时再对数据区补抓一次
+        byte[]? block;
+        if (wholeFile != null && entry.Offset < wholeFile.Length)
+            block = wholeFile[(int)entry.Offset..];
+        else
+            block = await FetchRangeAsync(modUrl, entry.Offset,
+                entry.Offset + 30 + entry.NameByteLength + 512 + compressedSize - 1, run).ConfigureAwait(false);
+        if (block == null)
+            return (ModOutcome.Failed, "");
+
+        long dataOffset = 30 + entry.NameByteLength; // 解析失败回退（假设无 extra）
+        if (ZipRemoteReader.TryParseLocalHeader(block, out var parsedOffset, out _))
+            dataOffset = parsedOffset;
+
+        byte[]? manifestData = dataOffset + compressedSize <= block.Length
+            ? block[(int)dataOffset..(int)(dataOffset + compressedSize)]
+            : await FetchRangeAsync(modUrl, entry.Offset + dataOffset,
+                entry.Offset + dataOffset + compressedSize - 1, run).ConfigureAwait(false);
+        var guid = ZipRemoteReader.ExtractManifestGuid(manifestData, entry.CompressionMethod);
+        return guid != null ? (ModOutcome.Ok, guid) : (ModOutcome.NoGuid, "");
     }
 
     // ==================== 内置数据库 ====================

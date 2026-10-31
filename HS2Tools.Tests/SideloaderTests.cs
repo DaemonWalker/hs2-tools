@@ -47,9 +47,9 @@ public class SideloaderTests : IDisposable
         // "../" 在第 2 行被跳过；readme.txt 两类都不是
         Assert.Equal(new[] { "http://x/subdir/" }, dirs);
         Assert.Equal(3, mods.Count);
-        Assert.Contains("http://x/mod one.zipmod", mods); // %20 已解码
-        Assert.Contains("http://x/modtwo.zipmod", mods);
-        Assert.Contains("http://x/MOD3.ZIPMOD", mods); // 大小写不敏感
+        Assert.Contains(mods, m => m.Url == "http://x/mod one.zipmod"); // %20 已解码
+        Assert.Contains(mods, m => m.Url == "http://x/modtwo.zipmod");
+        Assert.Contains(mods, m => m.Url == "http://x/MOD3.ZIPMOD"); // 大小写不敏感
     }
 
     [Fact]
@@ -100,7 +100,25 @@ public class SideloaderTests : IDisposable
         var (dirs, mods) = SideloaderService.ParseLinks(LoadHtml(html), "http://x/");
 
         Assert.Equal(new[] { "http://x/%23KK_MaterialEditor/" }, dirs);
-        Assert.Equal(new[] { "http://x/mod%23x.zipmod" }, mods);
+        Assert.Equal(new[] { "http://x/mod%23x.zipmod" }, mods.Select(m => m.Url).ToArray());
+    }
+
+    [Fact]
+    public void ParseLinks_HtmlEntities_Decoded()
+    {
+        // HAP 保留属性值中的 HTML 实体：&amp; 不解码会让请求 404（真实站点 Nonna &amp; Clara/ 等目录）
+        var html = """
+            <table id="indexlist">
+            <tr><td>h</td></tr>
+            <tr><td>h</td></tr>
+            <tr><td><a href="Nonna &amp; Clara/">Nonna &amp; Clara/</a></td></tr>
+            <tr><td><a href="SoDevs&amp;YeDevs/mod&amp;x.zipmod">m</a></td></tr>
+            </table>
+            """;
+        var (dirs, mods) = SideloaderService.ParseLinks(LoadHtml(html), "http://x/");
+
+        Assert.Equal(new[] { "http://x/Nonna & Clara/" }, dirs);
+        Assert.Equal(new[] { "http://x/SoDevs&YeDevs/mod&x.zipmod" }, mods.Select(m => m.Url).ToArray());
     }
 
     // ==================== 集成爬取 ====================
@@ -138,14 +156,16 @@ public class SideloaderTests : IDisposable
         var svc = new SideloaderService(baseUrl: _server.BaseUrl);
         var result = await svc.RunAsync(logs.Add, new SyncProgress<SideloaderProgress>(progress.Add));
 
-        Assert.Equal(2, result.Count);
-        Assert.Equal("modA.zipmod", result["com.test.mod.a"]);
-        Assert.Equal("subdir/modB.zipmod", result["com.test.mod.b"]);
+        Assert.Equal(2, result.Mods.Count);
+        Assert.Equal("modA.zipmod", result.Mods["com.test.mod.a"].Url);
+        Assert.Equal("subdir/modB.zipmod", result.Mods["com.test.mod.b"].Url);
         Assert.Contains(logs, l => l.Contains("Crawl completed, found 2 mods"));
         Assert.NotEmpty(progress);
 
         // 确认确实只发了 Range 小请求而不是整文件下载
         Assert.DoesNotContain(_server.Requests, r => r.Path.EndsWith(".zipmod") && r.Range == null && r.Method == "GET");
+        // suffix range 首请求已带总大小（Content-Range）：不再发 HEAD
+        Assert.DoesNotContain(_server.Requests, r => r.Method == "HEAD");
     }
 
     [Fact]
@@ -157,7 +177,8 @@ public class SideloaderTests : IDisposable
 
         var result = await svc.RunAsync(logs.Add);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Mods);
+        Assert.Equal(1, result.FailedPages);
         Assert.Contains(logs, l => l.Contains("Failed to fetch"));
     }
 
@@ -180,7 +201,7 @@ public class SideloaderTests : IDisposable
         var svc = new SideloaderService(baseUrl: _server.BaseUrl);
         var result = await svc.RunAsync();
 
-        Assert.Equal("modS.zipmod", result["com.test.small"]);
+        Assert.Equal("modS.zipmod", result.Mods["com.test.small"].Url);
     }
 
     [Fact]
@@ -202,7 +223,7 @@ public class SideloaderTests : IDisposable
         var svc = new SideloaderService(baseUrl: _server.BaseUrl);
         var result = await svc.RunAsync();
 
-        Assert.Empty(result); // 渐进块被拒 → 无法解析中央目录 → 跳过该 mod（而不是吃掉数 GB 内存）
+        Assert.Empty(result.Mods); // 渐进块被拒 → 无法解析中央目录 → 跳过该 mod（而不是吃掉数 GB 内存）
     }
 
     [Fact]
@@ -231,7 +252,88 @@ public class SideloaderTests : IDisposable
         var svc = new SideloaderService(baseUrl: _server.BaseUrl);
         var result = await svc.RunAsync();
 
-        Assert.Equal("%23KK_MaterialEditor/modH.zipmod", result["com.test.hash"]);
+        Assert.Equal("%23KK_MaterialEditor/modH.zipmod", result.Mods["com.test.hash"].Url);
+    }
+
+    [Fact]
+    public async Task Crawl_Zip64_ExtractsGuid()
+    {
+        // ZIP64：CD/本地头 32 位大小均为哨兵，修复前 CD 解析 return null / 哨兵被当 4GB 大小误杀
+        var bytes = BuildZip64ZipmodBytes("com.test.zip64");
+
+        _server.MapHtml("/", """
+            <table id="indexlist">
+            <tr><th>Name</th></tr>
+            <tr><td><a href="../">../</a></td></tr>
+            <tr><td><a href="modZ.zipmod">modZ.zipmod</a></td></tr>
+            </table>
+            """);
+        _server.MapFile("/modZ.zipmod", bytes);
+
+        var svc = new SideloaderService(baseUrl: _server.BaseUrl);
+        var result = await svc.RunAsync();
+
+        Assert.Equal("modZ.zipmod", result.Mods["com.test.zip64"].Url);
+    }
+
+    [Fact]
+    public async Task Crawl_DataDescriptor_FallsBackToCentralDirSize()
+    {
+        // 本地头 size = 0（data descriptor）：修复前会发起 end < start 的 Range，GUID 提取失败
+        var bytes = BuildDataDescriptorZipmodBytes("com.test.dd");
+
+        _server.MapHtml("/", """
+            <table id="indexlist">
+            <tr><th>Name</th></tr>
+            <tr><td><a href="../">../</a></td></tr>
+            <tr><td><a href="modD.zipmod">modD.zipmod</a></td></tr>
+            </table>
+            """);
+        _server.MapFile("/modD.zipmod", bytes);
+
+        var svc = new SideloaderService(baseUrl: _server.BaseUrl);
+        var result = await svc.RunAsync();
+
+        Assert.Equal("modD.zipmod", result.Mods["com.test.dd"].Url);
+    }
+
+    [Fact]
+    public async Task Crawl_Incremental_UnchangedMod_MakesNoRequests()
+    {
+        var small = File.ReadAllBytes(WriteZipmod(_dir, "modA.zipmod",
+            MakeManifest("com.test.mod.a"), deflate: false));
+        _server.MapHtml("/", """
+            <table id="indexlist">
+            <tr><th>Name</th><th>Last modified</th><th>Size</th></tr>
+            <tr><td><a href="../">../</a></td><td>-</td><td>-</td></tr>
+            <tr><td><a href="modA.zipmod">modA.zipmod</a></td><td>2024-01-02 03:04</td><td>1.0 KB</td></tr>
+            </table>
+            """);
+        _server.MapFile("/modA.zipmod", small);
+
+        var svc = new SideloaderService(baseUrl: _server.BaseUrl);
+        var first = await svc.RunAsync();
+        var entry = first.Mods["com.test.mod.a"];
+        Assert.Equal("1.0 KB", entry.SizeText); // 末两列回退解析为 mtime/size 指纹
+        Assert.Equal("2024-01-02 03:04", entry.MtimeText);
+
+        // 第二轮：known 指纹一致 → 零 .zipmod 请求复用
+        var zipRequestsBefore = _server.Requests.Count(r => r.Path.EndsWith(".zipmod"));
+        var second = await svc.RunAsync(known: new Dictionary<string, KnownSideloadMod>
+        {
+            ["modA.zipmod"] = new("com.test.mod.a", entry.SizeText, entry.MtimeText),
+        });
+        Assert.Equal(1, second.ReusedMods);
+        Assert.Equal("modA.zipmod", second.Mods["com.test.mod.a"].Url);
+        Assert.Equal(zipRequestsBefore, _server.Requests.Count(r => r.Path.EndsWith(".zipmod")));
+
+        // 指纹变化（大小列变了）→ 回退为正常抓取
+        var third = await svc.RunAsync(known: new Dictionary<string, KnownSideloadMod>
+        {
+            ["modA.zipmod"] = new("com.test.mod.a", "2.0 KB", entry.MtimeText),
+        });
+        Assert.Equal(0, third.ReusedMods);
+        Assert.True(_server.Requests.Count(r => r.Path.EndsWith(".zipmod")) > zipRequestsBefore);
     }
 
     [Fact]
@@ -298,7 +400,7 @@ public class SideloaderTests : IDisposable
             },
             null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
 
-        Dictionary<string, string> result;
+        SideloadRunResult result;
         try
         {
             result = await svc.RunAsync(logs.Add, new SyncProgress<SideloaderProgress>(p => foundCount = p.Current));
@@ -308,11 +410,11 @@ public class SideloaderTests : IDisposable
             Trace("CRASH: " + ex);
             throw;
         }
-        Trace($"done: {result.Count} mods in {sw.Elapsed:mm\\:ss}");
+        Trace($"done: {result.Mods.Count} mods in {sw.Elapsed:mm\\:ss}");
         File.WriteAllText(Path.Combine(Path.GetTempPath(), "hs2tools-csharp-crawl.json"),
-            System.Text.Json.JsonSerializer.Serialize(result));
+            System.Text.Json.JsonSerializer.Serialize(result.Mods.ToDictionary(kv => kv.Key, kv => kv.Value.Url)));
 
-        Assert.NotEmpty(result);
+        Assert.NotEmpty(result.Mods);
 
         // 与 Go 版爬虫 result.json 对照（若存在）：guid 集合高度重合，共有 guid 的相对路径一致
         var goResultPath = Path.Combine(Path.GetTempPath(), "hs2tools-go-baseline", "result.json");
@@ -321,20 +423,20 @@ public class SideloaderTests : IDisposable
             var goResult = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(
                 File.ReadAllText(goResultPath))!;
 
-            var common = result.Keys.Intersect(goResult.Keys).ToArray();
-            var overlap = (double)common.Length / Math.Max(result.Count, goResult.Count);
+            var common = result.Mods.Keys.Intersect(goResult.Keys).ToArray();
+            var overlap = (double)common.Length / Math.Max(result.Mods.Count, goResult.Count);
             // 同一 guid 在站点上存在于多个目录（如 Exclusive HS2/AIS、Uncensor Selector/Bleeding Edge），
             // 原版结果 dict 为"后写覆盖"，Go map 随机序与 C# 爬取顺序不同 → 重复 guid 记录的路径
             // 本质是任意的，不作为提取错误。只要求差异占比 ≤1% 并全部记录备查。
-            var mismatches = common.Where(g => result[g] != goResult[g])
-                .Select(g => $"{g}: cs={result[g]} go={goResult[g]}").ToArray();
+            var mismatches = common.Where(g => result.Mods[g].Url != goResult[g])
+                .Select(g => $"{g}: cs={result.Mods[g].Url} go={goResult[g]}").ToArray();
 
-            Trace($"go={goResult.Count} cs={result.Count} common={common.Length} overlap={overlap:P2} dupPathMismatch={mismatches.Length}");
+            Trace($"go={goResult.Count} cs={result.Mods.Count} common={common.Length} overlap={overlap:P2} dupPathMismatch={mismatches.Length}");
             foreach (var m in mismatches)
                 Trace("dup: " + m);
 
             Assert.True(overlap >= 0.95,
-                $"guid 重合度 {overlap:P1} 过低（go={goResult.Count}, cs={result.Count}）");
+                $"guid 重合度 {overlap:P1} 过低（go={goResult.Count}, cs={result.Mods.Count}）");
             Assert.True(mismatches.Length <= common.Length * 0.01,
                 $"重复 guid 路径差异占比过高 {mismatches.Length}/{common.Length}：{string.Join("; ", mismatches.Take(5))}");
         }

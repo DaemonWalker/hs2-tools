@@ -32,12 +32,15 @@ public class MainWindowViewModelTests : IDisposable
         public bool IsRunning { get; private set; }
         public bool Cancelled { get; private set; }
         public Dictionary<string, string> Result { get; set; } = new();
+        public int FailedPages { get; set; }
+        public int FailedMods { get; set; }
         public Exception? Throw { get; set; } // 非 null 时 Gate 放行后抛出（异常分支测试）
         public readonly TaskCompletionSource Started = new();
         public readonly TaskCompletionSource Gate = new();
 
-        public async Task<Dictionary<string, string>> RunAsync(
-            Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null)
+        public async Task<SideloadRunResult> RunAsync(
+            Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null,
+            IReadOnlyDictionary<string, KnownSideloadMod>? known = null)
         {
             IsRunning = true;
             Started.TrySetResult();
@@ -48,7 +51,12 @@ public class MainWindowViewModelTests : IDisposable
                     throw Throw;
                 onLog?.Invoke("Processing: http://example.test/dir/");
                 onProgress?.Report(new SideloaderProgress(Result.Count, 0));
-                return Result;
+                return new SideloadRunResult
+                {
+                    Mods = Result.ToDictionary(kv => kv.Key, kv => new SideloadEntry { Url = kv.Value }),
+                    FailedPages = FailedPages,
+                    FailedMods = FailedMods,
+                };
             }
             finally
             {
@@ -646,6 +654,55 @@ public class MainWindowViewModelTests : IDisposable
         Assert.NotNull(meta);
         Assert.Equal(SideloadScanStatus.Error, meta.Status);
         Assert.Equal("boom", meta.Error);
+    }
+
+    [Fact]
+    public async Task Sideloader_PartialFailure_KeepsOldDatabase()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, string> { ["old"] = "dir/old.zipmod" });
+
+        var fake = new FakeSideloader { Result = new() { ["g1"] = "dir/g1.zipmod" }, FailedPages = 1 };
+        var vm = MakeVm(config, db, factory: () => fake);
+
+        vm.ToggleSideloaderCommand.Execute(null);
+        await WaitFor(() => fake.IsRunning);
+        fake.Gate.SetResult();
+        await WaitFor(() => vm.SideloaderState == SideloaderUiState.Partial);
+
+        // A 策略：有抓取失败时保留旧库，新结果不覆盖（内存与磁盘都不变）
+        Assert.Equal("dir/old.zipmod", db.Database["old"]);
+        Assert.False(db.Database.ContainsKey("g1"));
+        var reloaded = new SideloadDatabaseService(config);
+        Assert.Equal("dir/old.zipmod", reloaded.Database["old"]);
+
+        var meta = db.GetMeta();
+        Assert.Equal(SideloadScanStatus.PartialFailure, meta!.Status);
+        Assert.Equal(1, meta.FailedCount);
+        Assert.Equal(1, meta.FoundCount);
+    }
+
+    [Fact]
+    public async Task Sideloader_EmptyResult_KeepsOldDatabase()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, string> { ["old"] = "dir/old.zipmod" });
+
+        var fake = new FakeSideloader(); // 空结果、无失败：同样不得清空旧库
+        var vm = MakeVm(config, db, factory: () => fake);
+
+        vm.ToggleSideloaderCommand.Execute(null);
+        await WaitFor(() => fake.IsRunning);
+        fake.Gate.SetResult();
+        await WaitFor(() => vm.SideloaderState == SideloaderUiState.Partial);
+
+        Assert.Equal("dir/old.zipmod", db.Database["old"]);
+        Assert.Contains("已保留旧数据", vm.SideloaderError);
+        var meta = db.GetMeta();
+        Assert.Equal(SideloadScanStatus.PartialFailure, meta!.Status);
+        Assert.Equal(0, meta.FailedCount);
     }
 
     // ==================== 缺失 Mod 批量补全 ====================

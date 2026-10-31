@@ -28,6 +28,9 @@ public enum SideloaderUiState
     Success,
     Stopped,
     Error,
+
+    /// <summary>部分失败（空结果或有抓取失败）：已保留旧库不覆盖</summary>
+    Partial,
 }
 
 /// <summary>
@@ -536,18 +539,29 @@ public partial class MainWindowViewModel : ObservableObject
     private int _sideloaderFoundCount;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SideloaderProgressDetail))]
+    private int _sideloaderProcessedCount;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SideloaderProgressDetail))]
+    private int _sideloaderFailedCount;
+
+    /// <summary>运行中的进度明细（已处理 / 失败）：长时间爬取时让用户判断是否卡死</summary>
+    public string SideloaderProgressDetail => $"已处理 {SideloaderProcessedCount} 个，失败 {SideloaderFailedCount} 个";
+
+    [ObservableProperty]
     private string _sideloaderError = "";
 
     public bool IsSideloaderRunning => SideloaderState == SideloaderUiState.Running;
     public bool SideloaderSucceeded => SideloaderState == SideloaderUiState.Success;
     public bool SideloaderStopped => SideloaderState == SideloaderUiState.Stopped;
-    public bool SideloaderFailed => SideloaderState == SideloaderUiState.Error;
+    public bool SideloaderFailed => SideloaderState is SideloaderUiState.Error or SideloaderUiState.Partial;
 
     public string SideloaderButtonText => SideloaderState switch
     {
         SideloaderUiState.Running => _stopRequested ? "正在停止..." : "点击停止更新",
         SideloaderUiState.Success => "更新成功",
-        SideloaderUiState.Error => "重试更新",
+        SideloaderUiState.Error or SideloaderUiState.Partial => "重试更新",
         _ => "更新 Sideload 数据",
     };
 
@@ -565,7 +579,7 @@ public partial class MainWindowViewModel : ObservableObject
         _ = RunSideloaderAsync();
     }
 
-    /// <summary>View 确认停止后调用：置标志 + 取消（Cancel 只置标志位，请求不中断）</summary>
+    /// <summary>View 确认停止后调用：置标志 + 取消（Cancel 经 CancellationToken 中断在飞请求）</summary>
     public void ConfirmStopSideloader()
     {
         if (SideloaderState != SideloaderUiState.Running)
@@ -584,6 +598,8 @@ public partial class MainWindowViewModel : ObservableObject
         SideloaderState = SideloaderUiState.Running;
         SideloaderMessage = "正在启动...";
         SideloaderFoundCount = 0;
+        SideloaderProcessedCount = 0;
+        SideloaderFailedCount = 0;
         SideloaderError = "";
 
         try
@@ -598,12 +614,19 @@ public partial class MainWindowViewModel : ObservableObject
                         var i = msg.IndexOf(prefix, StringComparison.Ordinal);
                         UiDispatch.Run(() => SideloaderMessage = msg[(i + prefix.Length)..]);
                     }
-                    else
+                    else if (!msg.StartsWith("Found: ", StringComparison.Ordinal))
                     {
-                        ErrorLog.Log(msg); // 单页失败、manifest 超限等非 Processing 消息留痕
+                        // 单页失败、manifest 超限等留痕；"Found: guid" 每条 Mod 一条，不进 error.log（洪水）
+                        ErrorLog.Log(msg);
                     }
                 },
-                onProgress: new Progress<SideloaderProgress>(p => SideloaderFoundCount = p.Current));
+                onProgress: new Progress<SideloaderProgress>(p =>
+                {
+                    SideloaderFoundCount = p.Current;
+                    SideloaderProcessedCount = p.Processed;
+                    SideloaderFailedCount = p.Failed;
+                }),
+                known: _sideloadDb.GetKnownMods());
 
             if (_stopRequested)
             {
@@ -614,19 +637,35 @@ public partial class MainWindowViewModel : ObservableObject
                 {
                     LastScanTime = DateTime.Now,
                     Status = SideloadScanStatus.Stopped,
-                    FoundCount = result.Count,
+                    FoundCount = result.Mods.Count,
+                });
+            }
+            else if (result.Mods.Count == 0 || result.HasFailures)
+            {
+                // A 策略：空结果或有抓取失败时保留旧库不覆盖——部分失败的爬取若全量替换，
+                // 会把旧库中实际存在的条目抹掉（kkec 无内嵌库兜底，清空即真丢失）
+                SideloaderState = SideloaderUiState.Partial;
+                SideloaderError = result.Mods.Count == 0 && !result.HasFailures
+                    ? "未发现任何 Mod，为避免清空数据库已保留旧数据"
+                    : $"部分失败：{result.FailedPages} 个目录、{result.FailedMods} 个 Mod 抓取失败，已保留旧数据，请重试";
+                SaveScanMeta(new SideloadScanMeta
+                {
+                    LastScanTime = DateTime.Now,
+                    Status = SideloadScanStatus.PartialFailure,
+                    FoundCount = result.Mods.Count,
+                    FailedCount = result.FailedPages + result.FailedMods,
                 });
             }
             else
             {
-                _sideloadDb.Update(result);
+                _sideloadDb.Update(result.Mods);
                 SideloaderState = SideloaderUiState.Success;
-                SideloaderMessage = $"已发现 {result.Count} 个 Mods";
+                SideloaderMessage = $"已发现 {result.Mods.Count} 个 Mods";
                 SaveScanMeta(new SideloadScanMeta
                 {
                     LastScanTime = DateTime.Now,
                     Status = SideloadScanStatus.Success,
-                    FoundCount = result.Count,
+                    FoundCount = result.Mods.Count,
                 });
             }
         }

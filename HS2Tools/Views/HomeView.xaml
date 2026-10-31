@@ -197,6 +197,8 @@
                                        ToolTip="{Binding SideloaderMessage}"/>
                             <TextBlock Text="{Binding SideloaderFoundCount, StringFormat='已发现 {0} 个'}"
                                        Style="{StaticResource HintText}" Margin="0,4,0,0"/>
+                            <TextBlock Text="{Binding SideloaderProgressDetail}"
+                                       Style="{StaticResource HintText}" Margin="0,4,0,0"/>
                         </StackPanel>
                         <TextBlock Visibility="{Binding SideloaderSucceeded, Converter={StaticResource BoolToVisibility}}"
                                    Text="{Binding SideloaderMessage}" Foreground="{DynamicResource SuccessBrush}" Margin="0,10,0,0"/>

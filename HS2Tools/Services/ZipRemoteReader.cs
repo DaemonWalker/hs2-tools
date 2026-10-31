@@ -12,9 +12,10 @@ internal sealed class ZipEntryInfo
     /// <summary>条目名原始字节数（对应 Go len(entry.name)，用于本地头解析失败的回退计算）</summary>
     public ushort NameByteLength { get; init; }
 
-    public uint CompressedSize { get; init; }
-    public uint UncompressedSize { get; init; }
-    public uint Offset { get; init; }
+    /// <summary>ZIP64 已解析为真实值（哨兵 0xFFFFFFFF 从 extra 0x0001 还原）</summary>
+    public long CompressedSize { get; init; }
+    public long UncompressedSize { get; init; }
+    public long Offset { get; init; }
     public ushort CompressionMethod { get; init; }
 }
 
@@ -45,15 +46,20 @@ internal static class ZipRemoteReader
         if (eocdOffset < 0)
             return null;
 
-        var cdEntries = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(eocdOffset + 8));
-        var cdSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(eocdOffset + 12));
-        var cdOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(eocdOffset + 16));
+        long cdEntries = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(eocdOffset + 8));
+        long cdSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(eocdOffset + 12));
+        long cdOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(eocdOffset + 16));
 
-        if (cdOffset == 0xFFFFFFFF)
-            return null; // ZIP64 不支持
+        // ZIP64：EOCD 字段为哨兵时经 locator 找 ZIP64 EOCD 取真值
+        //（此前直接 return null，ZIP64 zipmod 整个被跳过）
+        if (cdOffset == 0xFFFFFFFF || cdSize == 0xFFFFFFFF || cdEntries == 0xFFFF)
+        {
+            if (!TryReadZip64Eocd(data, eocdOffset, totalSize, out cdEntries, out cdSize, out cdOffset))
+                return null;
+        }
 
         var dataStartOffset = totalSize - data.Length;
-        var cdRelativeOffset = (long)cdOffset - dataStartOffset;
+        var cdRelativeOffset = cdOffset - dataStartOffset;
 
         if (cdRelativeOffset < 0 || cdRelativeOffset + cdSize > data.Length)
             return null;
@@ -63,7 +69,7 @@ internal static class ZipRemoteReader
         var cdLen = data.Length - cdStart; // 注意：cdData 切片到窗口末尾（不是 cdSize 长度）
         var offset = 0;
 
-        for (var i = 0; i < cdEntries; i++)
+        for (long i = 0; i < cdEntries; i++)
         {
             if (offset + 46 > cdLen)
                 break;
@@ -79,12 +85,29 @@ internal static class ZipRemoteReader
             if (offset + totalLen > cdLen)
                 break;
 
+            var compressed = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(abs + 20));
+            var uncompressed = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(abs + 24));
+            var localOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(abs + 42));
+            long compressedSize = compressed, uncompressedSize = uncompressed, entryOffset = localOffset;
+
+            // ZIP64 条目：32 位字段为哨兵时从 extra 0x0001 按序还原（uncomp → comp → offset）
+            if (compressed == 0xFFFFFFFF || uncompressed == 0xFFFFFFFF || localOffset == 0xFFFFFFFF)
+            {
+                if (!TryReadZip64Extra(data, abs + 46 + nameLen, extraLen,
+                        uncompressed == 0xFFFFFFFF, compressed == 0xFFFFFFFF, localOffset == 0xFFFFFFFF,
+                        out var zu, out var zc, out var zo))
+                    return null;
+                if (uncompressed == 0xFFFFFFFF) uncompressedSize = zu;
+                if (compressed == 0xFFFFFFFF) compressedSize = zc;
+                if (localOffset == 0xFFFFFFFF) entryOffset = zo;
+            }
+
             var entry = new ZipEntryInfo
             {
                 CompressionMethod = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(abs + 10)),
-                CompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(abs + 20)),
-                UncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(abs + 24)),
-                Offset = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(abs + 42)),
+                CompressedSize = compressedSize,
+                UncompressedSize = uncompressedSize,
+                Offset = entryOffset,
                 NameByteLength = nameLen,
                 Name = Encoding.UTF8.GetString(data, abs + 46, nameLen),
             };
@@ -93,6 +116,73 @@ internal static class ZipRemoteReader
         }
 
         return entries;
+    }
+
+    /// <summary>ZIP64 EOCD locator 位于 EOCD 前 20 字节；ZIP64 EOCD 固定部分 56 字节</summary>
+    private static bool TryReadZip64Eocd(
+        byte[] data, int eocdOffset, long totalSize, out long entries, out long size, out long offset)
+    {
+        entries = size = offset = 0;
+        var locator = eocdOffset - 20;
+        if (locator < 0 || BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(locator)) != 0x07064b50)
+            return false;
+
+        var zip64EocdAbs = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(locator + 8));
+        var relative = zip64EocdAbs - (totalSize - data.Length);
+        if (relative < 0 || relative + 56 > data.Length)
+            return false;
+
+        var p = (int)relative;
+        if (BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(p)) != 0x06064b50)
+            return false;
+        entries = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(p + 32));
+        size = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(p + 40));
+        offset = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(p + 48));
+        return true;
+    }
+
+    /// <summary>从 extra 区找 0x0001（ZIP64），按序读出哨兵对应的 8 字节真值</summary>
+    private static bool TryReadZip64Extra(
+        byte[] data, int extraStart, int extraLen,
+        bool needUncompressed, bool needCompressed, bool needOffset,
+        out long uncompressed, out long compressed, out long offset)
+    {
+        uncompressed = compressed = offset = 0;
+        var end = extraStart + extraLen;
+        var p = extraStart;
+        while (p + 4 <= end && p + 4 <= data.Length)
+        {
+            var id = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(p));
+            var fieldSize = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(p + 2));
+            var fieldStart = p + 4;
+            var fieldEnd = fieldStart + fieldSize;
+            if (fieldEnd > end || fieldEnd > data.Length)
+                return false;
+            if (id == 0x0001)
+            {
+                var q = fieldStart;
+                if (needUncompressed)
+                {
+                    if (q + 8 > fieldEnd) return false;
+                    uncompressed = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(q));
+                    q += 8;
+                }
+                if (needCompressed)
+                {
+                    if (q + 8 > fieldEnd) return false;
+                    compressed = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(q));
+                    q += 8;
+                }
+                if (needOffset)
+                {
+                    if (q + 8 > fieldEnd) return false;
+                    offset = (long)BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(q));
+                }
+                return true;
+            }
+            p = fieldEnd;
+        }
+        return false;
     }
 
     /// <summary>
