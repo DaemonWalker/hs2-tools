@@ -45,19 +45,46 @@
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*" MinWidth="420"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <controls:CardGridControl x:Name="Grid"
+            <Border Style="{StaticResource Card}" Padding="12,10,8,10" Margin="0,0,6,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="目录" Style="{StaticResource SectionTitle}" Margin="4,0,0,10"/>
+                    <TreeView Grid.Row="1" ItemsSource="{Binding Directories}"
+                              Background="Transparent" BorderThickness="0"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <TreeView.ItemContainerStyle>
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                            </Style>
+                        </TreeView.ItemContainerStyle>
+                        <TreeView.ItemTemplate>
+                            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                <TextBlock Text="{Binding Name}" ToolTip="{Binding FullPath}" Margin="2,3"/>
+                            </HierarchicalDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                </Grid>
+            </Border>
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+            <controls:CardGridControl Grid.Column="2" x:Name="Grid"
                                       CardKind="Chara"
                                       ItemsSource="{Binding AllPaths}"
                                       SelectedPath="{Binding SelectedPath, Mode=TwoWay}"
                                       SearchText="{Binding Text, ElementName=SearchBox}"
                                       EmptyText="{Binding EmptyText}"
                                       SortType="{Binding SelectedValue, ElementName=SortBox}"/>
-            <GridSplitter Grid.Column="1" Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}"/>
-            <Border Grid.Column="2" Width="380" Margin="6,0,0,0" Padding="16" CornerRadius="10"
+            <GridSplitter Grid.Column="3" Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}"/>
+            <Border Grid.Column="4" Width="380" Margin="6,0,0,0" Padding="16" CornerRadius="10"
                     Background="{DynamicResource CardBackgroundBrush}"
                     BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                     Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisibility}}">

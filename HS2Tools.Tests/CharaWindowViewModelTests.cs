@@ -46,6 +46,47 @@ public class CharaWindowViewModelTests : IDisposable
     }
 
     [Fact]
+    public void DirectorySelection_DefaultsToRootAndShowsOnlyDirectCards()
+    {
+        var gameDir = MakeGameDir();
+        var charaDir = Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative);
+        var groupDir = Path.Combine(charaDir, "分组");
+        var nestedDir = Path.Combine(groupDir, "嵌套");
+        var emptyDir = Path.Combine(charaDir, "空目录");
+        Directory.CreateDirectory(nestedDir);
+        Directory.CreateDirectory(emptyDir);
+        var rootCard = TestAssets.WritePng(charaDir, "root.png", TestAssets.PngPrefix());
+        var groupCard = TestAssets.WritePng(groupDir, "group.png", TestAssets.PngPrefix());
+        TestAssets.WritePng(nestedDir, "nested.png", TestAssets.PngPrefix());
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.LoadCardPaths();
+
+        var root = Assert.Single(vm.Directories);
+        Assert.True(root.IsSelected);
+        Assert.Equal(charaDir, vm.SelectedDirectory?.FullPath);
+        Assert.Equal(new[] { rootCard }, vm.AllPaths);
+        Assert.Contains(root.Children, node => node.FullPath == emptyDir);
+
+        var group = root.Children.Single(node => node.FullPath == groupDir);
+        group.IsSelected = true;
+        Assert.Same(group, vm.SelectedDirectory);
+        Assert.Equal(new[] { groupCard }, vm.AllPaths);
+
+        vm.SelectedPath = groupCard;
+        var empty = root.Children.Single(node => node.FullPath == emptyDir);
+        empty.IsSelected = true;
+        Assert.Empty(vm.AllPaths);
+        Assert.Null(vm.SelectedPath);
+
+        vm.LoadCardPaths();
+        Assert.Equal(charaDir, vm.SelectedDirectory?.FullPath);
+        Assert.Equal(new[] { rootCard }, vm.AllPaths);
+    }
+
+    [Fact]
     public void ConfigChanged_GameSwitch_RescansNewGameDir()
     {
         var hs2Dir = MakeGameDir();

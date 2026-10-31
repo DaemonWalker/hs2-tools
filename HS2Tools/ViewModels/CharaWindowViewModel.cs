@@ -12,6 +12,7 @@ public partial class CharaWindowViewModel : ObservableObject
 {
     private readonly ConfigService _config;
     private readonly ScannerService _scanner;
+    private List<string> _scannedPaths = new();
 
     private string _loadedGameId;
     private string _loadedGamePath;
@@ -35,7 +36,13 @@ public partial class CharaWindowViewModel : ObservableObject
     /// <summary>详情面板（选择变化时自动加载）</summary>
     public CardDetailViewModel Detail { get; }
 
-    /// <summary>目录扫描到的全部卡片路径（控件负责过滤/排序）</summary>
+    [ObservableProperty]
+    private List<CardDirectoryNode> _directories = new();
+
+    [ObservableProperty]
+    private CardDirectoryNode? _selectedDirectory;
+
+    /// <summary>当前目录直接包含的卡片路径（控件负责过滤/排序）</summary>
     [ObservableProperty]
     private List<string> _allPaths = new();
 
@@ -59,6 +66,15 @@ public partial class CharaWindowViewModel : ObservableObject
 
     partial void OnSelectedPathChanged(string? value) => _ = Detail.LoadAsync(value, () => SelectedPath);
 
+    partial void OnSelectedDirectoryChanged(CardDirectoryNode? value)
+    {
+        AllPaths = value is null
+            ? new List<string>()
+            : CardDirectoryTree.FilterDirectPaths(_scannedPaths, value.FullPath);
+        if (SelectedPath is not null && !AllPaths.Contains(SelectedPath, StringComparer.OrdinalIgnoreCase))
+            SelectedPath = null;
+    }
+
     private void ReloadIfGameContextChanged()
     {
         if (_config.Settings.CurrentGame == _loadedGameId
@@ -68,15 +84,34 @@ public partial class CharaWindowViewModel : ObservableObject
         LoadCardPaths();
     }
 
-    /// <summary>扫描角色卡目录；路径未通过当前游戏 exe 校验时清空，避免误展示其他游戏卡片。</summary>
+    /// <summary>扫描角色卡目录，默认选中根目录并仅展示其直接包含的卡片。</summary>
     public void LoadCardPaths()
     {
         _loadedGameId = _config.Settings.CurrentGame;
         _loadedGamePath = _config.Settings.Current.GamePath;
         var dir = _config.GetCharaDir();
-        AllPaths = dir is null || !_config.IsCurrentGamePathValid
+        var valid = dir is not null && _config.IsCurrentGamePathValid;
+        _scannedPaths = !valid
             ? new List<string>()
-            : _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".png" } });
+            : _scanner.ScanDirectory(dir!, new ScanOptions { TargetExtension = { ".png" } });
+
+        SelectedDirectory = null;
+        Directories = new List<CardDirectoryNode>();
+        if (valid)
+        {
+            var root = CardDirectoryTree.Build(dir!, _scanner.ScanDirectories(dir!));
+            SubscribeDirectoryEvents(root);
+            root.IsExpanded = true;
+            Directories = new List<CardDirectoryNode> { root };
+            root.IsSelected = true;
+        }
         OnPropertyChanged(nameof(EmptyText));
+    }
+
+    private void SubscribeDirectoryEvents(CardDirectoryNode node)
+    {
+        node.Selected += (_, _) => SelectedDirectory = node;
+        foreach (var child in node.Children)
+            SubscribeDirectoryEvents(child);
     }
 }

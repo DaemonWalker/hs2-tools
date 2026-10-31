@@ -15,6 +15,36 @@ public class SceneWindowViewModelTests : IDisposable
             new SideloadDatabaseService(config), new GameLauncherService(config));
 
     [Fact]
+    public void DirectorySelection_ShowsDirectScenesAndEmptyDirectories()
+    {
+        var gameDir = Path.Combine(_dir, "game-hs2");
+        var sceneDir = Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative);
+        var groupDir = Path.Combine(sceneDir, "分组");
+        var nestedDir = Path.Combine(groupDir, "嵌套");
+        var emptyDir = Path.Combine(sceneDir, "空目录");
+        Directory.CreateDirectory(nestedDir);
+        Directory.CreateDirectory(emptyDir);
+        File.WriteAllText(Path.Combine(gameDir, GameProfiles.Hs2.GameExeName), "exe");
+        TestAssets.WritePng(sceneDir, "root.png", TestAssets.PngPrefix());
+        var groupCard = TestAssets.WritePng(groupDir, "group.png", TestAssets.PngPrefix());
+        TestAssets.WritePng(nestedDir, "nested.png", TestAssets.PngPrefix());
+
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = MakeVm(config);
+        vm.LoadCardPaths();
+
+        Assert.Single(vm.AllPaths);
+        var root = Assert.Single(vm.Directories);
+        Assert.Equal(2, root.Children.Count);
+        Assert.Contains(root.Children, node => node.FullPath == emptyDir);
+
+        var group = root.Children.Single(node => node.FullPath == groupDir);
+        group.IsSelected = true;
+        Assert.Equal(new[] { groupCard }, vm.AllPaths);
+    }
+
+    [Fact]
     public void ConfigChanged_GameSwitch_RescansNewGameDir()
     {
         // hs2 / kk 场景目录相对路径相同，仅游戏根不同

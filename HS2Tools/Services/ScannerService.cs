@@ -66,6 +66,55 @@ public class ScannerService
         return files;
     }
 
+    /// <summary>递归扫描全部子目录（不含根目录），跳过符号链接及不可访问的目录。</summary>
+    public List<string> ScanDirectories(string dir)
+    {
+        var directories = new List<string>();
+        try
+        {
+            if (!Directory.Exists(dir))
+                return directories;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"ScanDirectories root inaccessible: {dir}: {ex.Message}");
+            return directories;
+        }
+
+        ScanDirectoriesRecursive(dir, directories);
+        return directories;
+    }
+
+    private static void ScanDirectoriesRecursive(string dir, List<string> directories)
+    {
+        IEnumerable<string> entries;
+        try
+        {
+            entries = Directory.EnumerateDirectories(dir);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"ScanDirectories skip unreadable dir: {dir}: {ex.Message}");
+            return;
+        }
+
+        foreach (var entry in entries.OrderBy(e => e, StringComparer.Ordinal))
+        {
+            try
+            {
+                var attrs = File.GetAttributes(entry);
+                if ((attrs & FileAttributes.ReparsePoint) != 0)
+                    continue;
+                directories.Add(entry);
+                ScanDirectoriesRecursive(entry, directories);
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Log($"ScanDirectories skip entry: {entry}: {ex.Message}");
+            }
+        }
+    }
+
     private static void ScanDirRecursive(string dir, ScanOptions opts, List<string> files)
     {
         IEnumerable<string> entries;

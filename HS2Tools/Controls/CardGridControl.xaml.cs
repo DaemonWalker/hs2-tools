@@ -15,7 +15,7 @@ public enum CardKind
 
 /// <summary>
 /// 卡片网格控件（对应原版 CardGrid.tsx）。
-/// 数据流对齐原版：全量路径（ItemsSource）→ 搜索过滤/排序 → 按批解析可视增量
+/// 数据流对齐原版：当前目录路径（ItemsSource）→ 搜索过滤/排序 → 按批解析可视增量
 /// （每批 24，ScannerService.ReadPngPageDataBatchAsync 一次读盘拿名称+缩略图），
 /// 滚动接近底部（200px 阈值）自动加载下一批；缩略图 LRU 缓存控内存。
 /// 收藏读写统一配置（ConfigService.Settings.Current.Favorites，按游戏隔离）。
@@ -52,7 +52,7 @@ public partial class CardGridControl : UserControl
 
     // ==================== 依赖属性 ====================
 
-    /// <summary>全量卡片路径（已扫描；控件内部负责过滤/排序/分批解析）</summary>
+    /// <summary>当前目录卡片路径（已扫描；控件内部负责过滤/排序/分批解析）</summary>
     public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(
         nameof(ItemsSource), typeof(IReadOnlyList<string>), typeof(CardGridControl),
         new PropertyMetadata(null, (d, _) => ((CardGridControl)d).ApplyFilterSortAndReset()));

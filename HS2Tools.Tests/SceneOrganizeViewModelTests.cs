@@ -241,10 +241,12 @@ public class SceneOrganizeViewModelTests : IDisposable
         vm.Organize.AddTaskCommand.Execute(null);
         await vm.Organize.ExecuteAllCommand.ExecuteAsync(null);
 
-        // 整理完成后场景目录重扫（不排除已整理目录，与原版一致）：
-        // s2 仍在根目录，s1 出现在 hs_tools_ 子目录中
-        Assert.Equal(2, vm.AllPaths.Count);
+        // 整理完成后重扫并回到根目录：s2 直接可见，s1 位于 hs_tools_ 子目录中
+        Assert.Single(vm.AllPaths);
         Assert.Contains(vm.AllPaths, p => p.EndsWith("s2.png"));
-        Assert.Contains(vm.AllPaths, p => p.Contains("hs_tools_合集") && p.EndsWith("s1.png"));
+        var target = Assert.Single(vm.Directories).Children.Single(node => node.Name == "hs_tools_合集");
+        target.IsSelected = true;
+        Assert.Single(vm.AllPaths);
+        Assert.Contains(vm.AllPaths, p => p.EndsWith("s1.png"));
     }
 }
