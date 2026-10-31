@@ -56,13 +56,13 @@ public class DownloadWindowViewModelTests : IDisposable
     {
         using var server = new TestHttpServer();
         server.MapSlow("/m/slow.zipmod", ZipBytes(), chunkSize: 10, delayMs: 50); // 保持下载中
-        server.MapFile("/m/fast.zipmod", ZipBytes());
+        server.MapSlow("/m/fast.zipmod", ZipBytes(), chunkSize: 10, delayMs: 20);
 
         var downloads = new DownloadManager(null, server.BaseUrl);
         var vm = new DownloadWindowViewModel(downloads);
 
-        downloads.StartDownload("slow", "m/slow.zipmod", _dir);
         downloads.StartDownload("fast", "m/fast.zipmod", _dir);
+        downloads.StartDownload("slow", "m/slow.zipmod", _dir);
 
         // TaskAdded 事件同步到达（无需等待网络）
         Assert.Equal(2, vm.TotalCount);
@@ -88,6 +88,40 @@ public class DownloadWindowViewModelTests : IDisposable
 
         downloads.CancelAll(); // 清理慢速任务
         await WaitFor(() => Item(vm, "slow").Status == DownloadTaskStatus.Cancelled);
+    }
+
+    [Fact]
+    public async Task Queue_ShowsAllPendingTasks_AndStartsNextAutomatically()
+    {
+        using var server = new TestHttpServer();
+        server.MapSlow("/m/a.zipmod", ZipBytes(), chunkSize: 10, delayMs: 50);
+        server.MapSlow("/m/b.zipmod", ZipBytes(), chunkSize: 10, delayMs: 20);
+        server.MapSlow("/m/c.zipmod", ZipBytes(), chunkSize: 10, delayMs: 20);
+
+        var downloads = new DownloadManager(null, server.BaseUrl);
+        var vm = new DownloadWindowViewModel(downloads);
+        downloads.StartDownload("a", "m/a.zipmod", _dir);
+        downloads.StartDownload("b", "m/b.zipmod", _dir);
+        downloads.StartDownload("c", "m/c.zipmod", _dir);
+
+        Assert.Equal(3, vm.TotalCount);
+        Assert.Equal(3, vm.ActiveCount);
+        Assert.Equal(DownloadTaskStatus.Downloading, Item(vm, "a").Status);
+        Assert.Equal(DownloadTaskStatus.Pending, Item(vm, "b").Status);
+        Assert.Equal(DownloadTaskStatus.Pending, Item(vm, "c").Status);
+        Assert.Equal("等待中", Item(vm, "b").StatusText);
+        Assert.True(Item(vm, "b").ShowCancel);
+        Assert.False(Item(vm, "b").IsDownloading);
+
+        downloads.Cancel("c");
+        Assert.Equal(DownloadTaskStatus.Cancelled, Item(vm, "c").Status);
+        Assert.Equal(2, vm.ActiveCount);
+
+        await WaitFor(() => Item(vm, "a").Status == DownloadTaskStatus.Completed &&
+                            Item(vm, "b").Status == DownloadTaskStatus.Completed);
+        Assert.Equal(2, vm.CompletedCount);
+        Assert.Equal(0, vm.ActiveCount);
+        Assert.Equal(DownloadTaskStatus.Cancelled, Item(vm, "c").Status);
     }
 
     [Fact]
@@ -207,9 +241,12 @@ public class DownloadWindowViewModelTests : IDisposable
     }
 
     [Fact]
-    public void StatusText_MatchesOriginalFormat()
+    public void StatusText_MatchesTaskStates()
     {
         var item = new DownloadTaskItemViewModel { Id = "t", CreatedAt = DateTime.Now };
+        item.Update(MakeTask("t", DownloadTaskStatus.Pending));
+        Assert.Equal("等待中", item.StatusText);
+
         item.Update(MakeTask("t", DownloadTaskStatus.Downloading, downloaded: 512, total: 2048, speed: 256));
         Assert.Equal("512 B / 2 KB · 25% · 256 B/s · 00:06", item.StatusText);
 

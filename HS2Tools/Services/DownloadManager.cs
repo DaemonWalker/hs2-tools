@@ -13,6 +13,8 @@ public class DownloadManager
     public const string BaseUrl = "https://sideload.betterrepack.com/download/AISHS2/";
 
     private readonly ConcurrentDictionary<string, DownloadTask> _tasks = new();
+    private readonly Queue<string> _queue = new();
+    private readonly object _sync = new();
     private readonly Func<string?> _proxyProvider;
     private readonly string _baseUrl;
 
@@ -36,81 +38,153 @@ public class DownloadManager
     public IReadOnlyCollection<DownloadTask> Tasks => _tasks.Values.ToList();
 
     /// <summary>
-    /// 触发下载。同名任务正在下载时拒绝重复触发（返回 false），
-    /// 避免原版覆盖 activeDownloads 条目导致旧任务失控的问题。
+    /// 将下载加入全局串行队列。同名任务等待中或下载中时拒绝重复触发（返回 false）。
     /// baseUrl 为空时用构造默认值；多游戏场景由调用方传当前游戏档案的 SideloadBaseUrl。
     /// </summary>
     public bool StartDownload(string name, string relativeUrl, string dir, string? baseUrl = null)
     {
-        if (_tasks.TryGetValue(name, out var existing) && existing.Status == DownloadTaskStatus.Downloading)
-            return false;
-
-        var task = new DownloadTask
+        DownloadTask task;
+        lock (_sync)
         {
-            Id = name,
-            Url = (baseUrl ?? _baseUrl) + relativeUrl,
-            OutputPath = Path.Combine(dir, name + ".zipmod"),
-            Status = DownloadTaskStatus.Downloading,
-            Cts = new CancellationTokenSource(),
-        };
-        _tasks[name] = task;
-        TaskAdded?.Invoke(this, task);
+            if (_tasks.TryGetValue(name, out var existing) &&
+                existing.Status is DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading)
+                return false;
 
-        _ = RunAsync(task);
+            task = new DownloadTask
+            {
+                Id = name,
+                Url = (baseUrl ?? _baseUrl) + relativeUrl,
+                OutputPath = Path.Combine(dir, name + ".zipmod"),
+                Status = DownloadTaskStatus.Pending,
+                Cts = new CancellationTokenSource(),
+            };
+            _tasks[name] = task;
+            _queue.Enqueue(name);
+        }
+
+        TaskAdded?.Invoke(this, task);
+        StartNext();
         return true;
     }
 
-    /// <summary>取消下载（对应 CancelDownload）</summary>
+    /// <summary>取消等待中或下载中的任务</summary>
     public bool Cancel(string name)
     {
-        if (_tasks.TryGetValue(name, out var task) && task.Status == DownloadTaskStatus.Downloading)
+        DownloadTask task;
+        var cancelPending = false;
+        lock (_sync)
         {
-            task.Cts?.Cancel();
-            return true;
+            if (!_tasks.TryGetValue(name, out task!) ||
+                task.Status is not (DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading))
+                return false;
+
+            if (task.Status == DownloadTaskStatus.Pending)
+            {
+                task.Status = DownloadTaskStatus.Cancelled;
+                cancelPending = true;
+            }
         }
-        return false;
+
+        if (cancelPending)
+            TaskFinished?.Invoke(this, task);
+        else
+            task.Cts?.Cancel();
+        return true;
     }
 
     /// <summary>全部取消</summary>
     public void CancelAll()
     {
-        foreach (var task in _tasks.Values)
+        List<DownloadTask> pending = new();
+        List<CancellationTokenSource> downloading = new();
+        lock (_sync)
         {
-            if (task.Status == DownloadTaskStatus.Downloading)
-                task.Cts?.Cancel();
+            foreach (var task in _tasks.Values)
+            {
+                if (task.Status == DownloadTaskStatus.Pending)
+                {
+                    task.Status = DownloadTaskStatus.Cancelled;
+                    pending.Add(task);
+                }
+                else if (task.Status == DownloadTaskStatus.Downloading && task.Cts is not null)
+                {
+                    downloading.Add(task.Cts);
+                }
+            }
         }
+
+        foreach (var task in pending)
+            TaskFinished?.Invoke(this, task);
+        foreach (var cts in downloading)
+            cts.Cancel();
     }
 
-    /// <summary>重试（非下载中的任务，断点续传）</summary>
+    /// <summary>重试（非等待/下载中的任务，断点续传）</summary>
     public bool Retry(string name)
     {
-        if (!_tasks.TryGetValue(name, out var task) || task.Status == DownloadTaskStatus.Downloading)
-            return false;
+        DownloadTask task;
+        lock (_sync)
+        {
+            if (!_tasks.TryGetValue(name, out task!) ||
+                task.Status is DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading)
+                return false;
 
-        task.Status = DownloadTaskStatus.Downloading;
-        task.ErrorMessage = null;
-        task.Downloaded = 0;
-        task.Total = -1;
-        task.Speed = 0;
-        task.Percent = 0;
-        task.Cts?.Dispose();
-        task.Cts = new CancellationTokenSource();
+            task.Status = DownloadTaskStatus.Pending;
+            task.ErrorMessage = null;
+            task.Downloaded = 0;
+            task.Total = -1;
+            task.Speed = 0;
+            task.Percent = 0;
+            task.Cts?.Dispose();
+            task.Cts = new CancellationTokenSource();
+            _queue.Enqueue(name);
+        }
+
         TaskProgress?.Invoke(this, task);
-
-        _ = RunAsync(task);
+        StartNext();
         return true;
     }
 
-    /// <summary>清除所有非下载中的任务</summary>
+    /// <summary>清除所有非等待/下载中的任务</summary>
     public int ClearFinished()
     {
         var removed = 0;
-        foreach (var (key, task) in _tasks)
+        lock (_sync)
         {
-            if (task.Status != DownloadTaskStatus.Downloading && _tasks.TryRemove(key, out _))
-                removed++;
+            foreach (var (key, task) in _tasks)
+            {
+                if (task.Status is not (DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading) &&
+                    _tasks.TryRemove(key, out _))
+                    removed++;
+            }
         }
         return removed;
+    }
+
+    private void StartNext()
+    {
+        DownloadTask? next = null;
+        lock (_sync)
+        {
+            if (_tasks.Values.Any(t => t.Status == DownloadTaskStatus.Downloading))
+                return;
+
+            while (_queue.Count > 0)
+            {
+                var id = _queue.Dequeue();
+                if (_tasks.TryGetValue(id, out var task) && task.Status == DownloadTaskStatus.Pending)
+                {
+                    task.Status = DownloadTaskStatus.Downloading;
+                    next = task;
+                    break;
+                }
+            }
+        }
+
+        if (next is null)
+            return;
+        TaskProgress?.Invoke(this, next);
+        _ = RunAsync(next);
     }
 
     private async Task RunAsync(DownloadTask task)
@@ -144,6 +218,10 @@ public class DownloadManager
             task.ErrorMessage = ex.Message;
             ErrorLog.Log($"Download failed: {task.Id}: {ex.Message}"); // 行内文案不变，失败留痕
             TaskFinished?.Invoke(this, task);
+        }
+        finally
+        {
+            StartNext();
         }
     }
 

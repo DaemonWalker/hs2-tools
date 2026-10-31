@@ -646,39 +646,50 @@ public partial class MainWindowViewModel : ObservableObject
 
         IsComplementing = true;
         ComplementProgress = $"0/{list.Count}";
+        var remaining = list.Select(i => i.Guid).ToHashSet();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var ok = 0;
+
+        void OnProgress(object? s, DownloadTask t)
+        {
+            lock (remaining)
+            {
+                if (t.Status == DownloadTaskStatus.Downloading && remaining.Contains(t.Id))
+                    UiDispatch.Run(() => ComplementCurrentName = t.Id);
+            }
+        }
+
+        void OnFinished(object? s, DownloadTask t)
+        {
+            bool allFinished;
+            int finishedCount;
+            lock (remaining)
+            {
+                if (!remaining.Remove(t.Id))
+                    return;
+                if (t.Status == DownloadTaskStatus.Completed)
+                    ok++;
+                finishedCount = list.Count - remaining.Count;
+                allFinished = remaining.Count == 0;
+            }
+
+            UiDispatch.Run(() => ComplementProgress = $"{finishedCount}/{list.Count}");
+            if (allFinished)
+                done.TrySetResult();
+        }
+
+        _downloads.TaskProgress += OnProgress;
+        _downloads.TaskFinished += OnFinished;
         try
         {
-            for (var i = 0; i < list.Count; i++)
+            // 一次性提交全部任务，让下载窗口立即显示当前任务与所有等待中任务。
+            foreach (var (guid, url) in list)
             {
-                var (guid, url) = list[i];
-                ComplementCurrentName = guid;
-
-                // 等待该任务到达终态（完成/失败/取消都算，失败不阻断后续——原版 catch 后继续）
-                var done = new TaskCompletionSource();
-                void OnFinished(object? s, DownloadTask t)
-                {
-                    if (t.Id == guid)
-                    {
-                        if (t.Status == DownloadTaskStatus.Completed)
-                            ok++;
-                        done.TrySetResult();
-                    }
-                }
-                _downloads.TaskFinished += OnFinished;
-                try
-                {
-                    // 同名任务正在下载时 StartDownload 返回 false——等待在途任务完成即可
-                    _downloads.StartDownload(guid, url, dir,
-                        DownloadBaseUrlOverride ?? _config.CurrentProfile.SideloadBaseUrl);
-                    await done.Task;
-                }
-                finally
-                {
-                    _downloads.TaskFinished -= OnFinished;
-                }
-                ComplementProgress = $"{i + 1}/{list.Count}";
+                // 同名任务已在队列时 StartDownload 返回 false——等待在途任务完成即可。
+                _downloads.StartDownload(guid, url, dir,
+                    DownloadBaseUrlOverride ?? _config.CurrentProfile.SideloadBaseUrl);
             }
+            await done.Task;
 
             // 结束汇总：失败/取消要体现在主页（原来失败只在下载窗口可见）
             ComplementProgress = ok == list.Count
@@ -687,6 +698,8 @@ public partial class MainWindowViewModel : ObservableObject
         }
         finally
         {
+            _downloads.TaskProgress -= OnProgress;
+            _downloads.TaskFinished -= OnFinished;
             IsComplementing = false;
             ComplementCurrentName = "";
         }

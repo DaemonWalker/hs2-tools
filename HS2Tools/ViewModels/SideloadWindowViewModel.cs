@@ -34,16 +34,18 @@ public partial class SideloadItemViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(DownloadText))]
     private double _percent;
 
-    public bool IsDownloading => TaskStatus == DownloadTaskStatus.Downloading;
+    public bool IsDownloading => TaskStatus is DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading;
     public bool IsCompleted => TaskStatus == DownloadTaskStatus.Completed;
 
     /// <summary>状态列：已存在 / 已下载（本次下载完成，待重扫入 LocalMods）/ 缺失</summary>
     public string StatusText => ExistsLocally ? "已存在" : IsCompleted ? "已下载" : "缺失";
 
-    /// <summary>下载中或已完成禁用按钮（对应原版 downloadingGuids 防重复点击）</summary>
+    /// <summary>等待中、下载中或已完成禁用按钮，防止重复入队</summary>
     public bool CanDownload => !ExistsLocally && !IsDownloading && !IsCompleted;
 
-    public string DownloadText => IsDownloading ? $"{Percent:0}%" : IsCompleted ? "已完成" : "下载";
+    public string DownloadText => TaskStatus == DownloadTaskStatus.Pending
+        ? "等待中"
+        : IsDownloading ? $"{Percent:0}%" : IsCompleted ? "已完成" : "下载";
 }
 
 /// <summary>

@@ -644,32 +644,47 @@ public class MainWindowViewModelTests : IDisposable
     // ==================== 缺失 Mod 批量补全 ====================
 
     [Fact]
-    public async Task Complement_DownloadsMissingMods_Serially()
+    public async Task Complement_EnqueuesAllMissingMods_ThenDownloadsSerially()
     {
         var gameDir = MakeGameDir();
         using var server = new TestHttpServer();
         var zipBytes = TestAssets.BuildZipBytes(
             ("manifest.xml", Encoding.UTF8.GetBytes(TestAssets.MakeManifest("g-missing")), true));
-        server.MapFile("/mods/g-missing.zipmod", zipBytes);
+        server.MapSlow("/mods/g-a.zipmod", zipBytes, chunkSize: 10, delayMs: 30);
+        server.MapSlow("/mods/g-b.zipmod", zipBytes, chunkSize: 10, delayMs: 30);
 
         using var config = new ConfigService(_dir);
         var db = new SideloadDatabaseService(config);
-        db.Update(new Dictionary<string, string> { ["g-missing"] = "mods/g-missing.zipmod" });
-        config.Update(s => s.Current.ModUsage["g-missing"] = 1);
+        db.Update(new Dictionary<string, string>
+        {
+            ["g-a"] = "mods/g-a.zipmod",
+            ["g-b"] = "mods/g-b.zipmod",
+        });
+        config.Update(s =>
+        {
+            s.Current.ModUsage["g-a"] = 1;
+            s.Current.ModUsage["g-b"] = 1;
+        });
 
         var downloads = new DownloadManager(null, server.BaseUrl);
         var vm = MakeVm(config, db, downloads);
-        vm.DownloadBaseUrlOverride = server.BaseUrl; // 下载指向本地测试服务器
+        vm.DownloadBaseUrlOverride = server.BaseUrl;
         vm.GamePath = gameDir;
 
-        Assert.Equal(1, vm.MissingModCount);
+        Assert.Equal(2, vm.MissingModCount);
         Assert.True(vm.ComplementMissingModsCommand.CanExecute(null));
 
-        await vm.ComplementMissingModsCommand.ExecuteAsync(null);
+        var complement = vm.ComplementMissingModsCommand.ExecuteAsync(null);
+        await WaitFor(() => downloads.Tasks.Count == 2);
 
-        var outFile = Path.Combine(gameDir, GameProfiles.Hs2.ModDownloadDirRelative, "g-missing.zipmod");
-        Assert.True(File.Exists(outFile));
-        Assert.Equal("1/1 补全完成", vm.ComplementProgress); // 结束汇总（阶段 4：成功数要体现）
+        Assert.Equal(1, downloads.Tasks.Count(t => t.Status == DownloadTaskStatus.Downloading));
+        Assert.Equal(1, downloads.Tasks.Count(t => t.Status == DownloadTaskStatus.Pending));
+        await complement;
+
+        var downloadDir = Path.Combine(gameDir, GameProfiles.Hs2.ModDownloadDirRelative);
+        Assert.True(File.Exists(Path.Combine(downloadDir, "g-a.zipmod")));
+        Assert.True(File.Exists(Path.Combine(downloadDir, "g-b.zipmod")));
+        Assert.Equal("2/2 补全完成", vm.ComplementProgress);
         Assert.False(vm.IsComplementing);
     }
 

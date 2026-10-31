@@ -39,8 +39,8 @@ public partial class DetailModItem : ObservableObject
     [ObservableProperty]
     private double _percent;
 
-    /// <summary>原版 DownloadButton 状态机：下载中 → 进度+取消；已完成 → 已完成；已拥有 → 已拥有；无链接 → 禁用；否则 → 下载</summary>
-    public bool IsDownloading => Status == DownloadTaskStatus.Downloading;
+    /// <summary>等待/下载中 → 进度+取消；已完成 → 已完成；已拥有 → 已拥有；无链接 → 禁用；否则 → 下载</summary>
+    public bool IsDownloading => Status is DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading;
     public bool ShowCompleted => Status == DownloadTaskStatus.Completed;
     public bool ShowOwned => !IsDownloading && !ShowCompleted && IsLocal;
     public bool ShowDownload => !IsDownloading && !ShowCompleted && !IsLocal && HasUrl;

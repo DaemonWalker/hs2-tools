@@ -16,6 +16,7 @@ public partial class DownloadTaskItemViewModel : ObservableObject
     public required DateTime CreatedAt { get; init; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsActive))]
     [NotifyPropertyChangedFor(nameof(IsDownloading))]
     [NotifyPropertyChangedFor(nameof(IsFailed))]
     [NotifyPropertyChangedFor(nameof(ShowCancel))]
@@ -43,21 +44,23 @@ public partial class DownloadTaskItemViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(StatusText))]
     private string? _errorMessage;
 
+    public bool IsActive => Status is DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading;
     public bool IsDownloading => Status == DownloadTaskStatus.Downloading;
     public bool IsFailed => Status == DownloadTaskStatus.Failed;
 
-    /// <summary>原版操作按钮状态机：下载中 → 取消；失败/已取消 → 重试；已完成 → 无操作</summary>
-    public bool ShowCancel => IsDownloading;
+    /// <summary>等待/下载中 → 取消；失败/已取消 → 重试；已完成 → 无操作</summary>
+    public bool ShowCancel => IsActive;
     public bool ShowRetry => Status is DownloadTaskStatus.Failed or DownloadTaskStatus.Cancelled;
 
-    /// <summary>状态文本（对应原版 TaskItem statusText）</summary>
+    /// <summary>状态文本</summary>
     public string StatusText => Status switch
     {
+        DownloadTaskStatus.Pending => "等待中",
         DownloadTaskStatus.Downloading => DownloadingText(),
         DownloadTaskStatus.Completed => Total > 0 ? FormatUtils.FormatBytes(Total) : "完成",
         DownloadTaskStatus.Failed => string.IsNullOrEmpty(ErrorMessage) ? "下载失败" : ErrorMessage!,
         DownloadTaskStatus.Cancelled => "已取消",
-        _ => "等待中",
+        _ => "未知状态",
     };
 
     /// <summary>下载中：已下载/总量 · 百分比 · 速度（· 剩余时间）；Total 未知（-1）时只显示已下载（照原版）</summary>
@@ -118,10 +121,10 @@ public partial class DownloadWindowViewModel : ObservableObject
         _downloads.TaskFinished += (_, t) => UiDispatch.Run(() => OnTaskChanged(t));
     }
 
-    /// <summary>全部任务（下载中优先，同状态按开始时间倒序）</summary>
+    /// <summary>全部任务（等待/下载中优先，同状态按开始时间倒序）</summary>
     public ObservableCollection<DownloadTaskItemViewModel> AllTasks { get; } = new();
 
-    /// <summary>下载中</summary>
+    /// <summary>等待中与下载中</summary>
     public ObservableCollection<DownloadTaskItemViewModel> ActiveTasks { get; } = new();
 
     /// <summary>已完成</summary>
@@ -153,11 +156,7 @@ public partial class DownloadWindowViewModel : ObservableObject
     /// <summary>有活跃任务时显示「全部取消」（对应原版 activeCount > 0）</summary>
     public bool ShowCancelAll => ActiveCount > 0;
 
-    /// <summary>
-    /// 有可清除任务（非下载中）时显示「清除完成」。
-    /// 原版 hasClearable 的 cancelled 检查是死代码（failedTasks 恒为 error 状态），
-    /// 这里按意图实现：存在任一非下载中任务即可清除，与 ClearFinished（清除全部非下载中）自洽。
-    /// </summary>
+    /// <summary>有可清除任务（非等待/下载中）时显示「清除完成」。</summary>
     public bool ShowClearFinished => TotalCount > ActiveCount;
 
     public bool IsAllEmpty => AllTasks.Count == 0;
@@ -165,13 +164,11 @@ public partial class DownloadWindowViewModel : ObservableObject
     public bool IsCompletedEmpty => CompletedTasks.Count == 0;
     public bool IsFailedEmpty => FailedTasks.Count == 0;
 
-    /// <summary>排序：下载中优先，然后按开始时间倒序（对应原版 TaskList sortedTasks）</summary>
+    /// <summary>排序：等待/下载中优先，然后按开始时间倒序</summary>
     internal static int CompareItems(DownloadTaskItemViewModel a, DownloadTaskItemViewModel b)
     {
-        var aDownloading = a.Status == DownloadTaskStatus.Downloading;
-        var bDownloading = b.Status == DownloadTaskStatus.Downloading;
-        if (aDownloading != bDownloading)
-            return aDownloading ? -1 : 1;
+        if (a.IsActive != b.IsActive)
+            return a.IsActive ? -1 : 1;
         return b.CreatedAt.CompareTo(a.CreatedAt);
     }
 
@@ -194,7 +191,7 @@ public partial class DownloadWindowViewModel : ObservableObject
         item.Update(task);
         if (statusChanged)
         {
-            // 状态迁移（含 Retry 回到下载中）影响排序与 Tab 归属
+            // 状态迁移（含 Retry 重新入队）影响排序与 Tab 归属
             _all.Sort(CompareItems);
             RefillViews();
         }
@@ -205,7 +202,7 @@ public partial class DownloadWindowViewModel : ObservableObject
     private void RefillViews()
     {
         Refill(AllTasks, _all);
-        Refill(ActiveTasks, _all.Where(i => i.Status == DownloadTaskStatus.Downloading));
+        Refill(ActiveTasks, _all.Where(i => i.IsActive));
         Refill(CompletedTasks, _all.Where(i => i.Status == DownloadTaskStatus.Completed));
         Refill(FailedTasks, _all.Where(i => i.Status == DownloadTaskStatus.Failed));
     }
@@ -220,7 +217,7 @@ public partial class DownloadWindowViewModel : ObservableObject
     private void RefreshStats()
     {
         TotalCount = _all.Count;
-        ActiveCount = _all.Count(i => i.Status == DownloadTaskStatus.Downloading);
+        ActiveCount = _all.Count(i => i.IsActive);
         CompletedCount = _all.Count(i => i.Status == DownloadTaskStatus.Completed);
         FailedCount = _all.Count(i => i.Status == DownloadTaskStatus.Failed);
         TotalSpeed = _all.Where(i => i.Status == DownloadTaskStatus.Downloading).Sum(i => i.Speed);
@@ -248,7 +245,7 @@ public partial class DownloadWindowViewModel : ObservableObject
     [RelayCommand]
     private void CancelAll() => _downloads.CancelAll();
 
-    /// <summary>清除所有非下载中任务（ClearFinished 无事件，需手动重建视图）</summary>
+    /// <summary>清除所有非等待/下载中任务（ClearFinished 无事件，需手动重建视图）</summary>
     [RelayCommand]
     private void ClearFinished()
     {

@@ -110,10 +110,10 @@
                 </Grid>
             </TabItem>
             <TabItem>
-                <TabItem.Header><TextBlock Text="{Binding ActiveCount, StringFormat='下载中 ({0})'}"/></TabItem.Header>
+                <TabItem.Header><TextBlock Text="{Binding ActiveCount, StringFormat='进行中 ({0})'}"/></TabItem.Header>
                 <Grid>
                     <ListBox ItemsSource="{Binding ActiveTasks}" Style="{StaticResource TaskList}"/>
-                    <TextBlock Text="没有正在下载的任务" Style="{StaticResource EmptyText}"
+                    <TextBlock Text="没有进行中或等待中的任务" Style="{StaticResource EmptyText}"
                                Visibility="{Binding IsActiveEmpty, Converter={StaticResource BoolToVisibility}}"/>
                 </Grid>
             </TabItem>

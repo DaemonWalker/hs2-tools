@@ -2,6 +2,7 @@ namespace HS2Tools.Models;
 
 public enum DownloadTaskStatus
 {
+    Pending,
     Downloading,
     Completed,
     Failed,
@@ -20,7 +21,7 @@ public class DownloadTask
     /// <summary>输出文件路径（{dir}/{name}.zipmod）</summary>
     public required string OutputPath { get; init; }
 
-    public DownloadTaskStatus Status { get; set; } = DownloadTaskStatus.Downloading;
+    public DownloadTaskStatus Status { get; set; } = DownloadTaskStatus.Pending;
 
     public long Downloaded { get; set; }
     public long Total { get; set; } = -1;
