@@ -58,19 +58,25 @@ public partial class CardDetailViewModel : ObservableObject
     private readonly DownloadManager _downloads;
     private readonly SideloadDatabaseService _sideloadDb;
     private readonly GameLauncherService _launcher;
+    private readonly AnalysisCacheService? _analysisCache;
+    private readonly string? _analysisScope;
 
     public CardDetailViewModel(
         ConfigService config,
         ScannerService scanner,
         DownloadManager downloads,
         SideloadDatabaseService sideloadDb,
-        GameLauncherService launcher)
+        GameLauncherService launcher,
+        AnalysisCacheService? analysisCache = null,
+        string? analysisScope = null)
     {
         _config = config;
         _scanner = scanner;
         _downloads = downloads;
         _sideloadDb = sideloadDb;
         _launcher = launcher;
+        _analysisCache = analysisCache;
+        _analysisScope = analysisScope;
 
         // 下载进度/完成 → 详情列表对应项状态刷新（单例服务与窗口同寿，无需退订）
         _downloads.TaskProgress += (_, t) => UiDispatch.Run(() => UpdateItemStatus(t));
@@ -109,10 +115,16 @@ public partial class CardDetailViewModel : ObservableObject
 
             var (names, mods, image) = await Task.Run(() =>
             {
-                var n = _scanner.ReadPngNames(path);
-                var m = _scanner.ReadPngMods(path);
-                var img = ThumbnailCache.DecodeBase64(_scanner.ReadPngImage(path));
-                return (n, m, img);
+                var cached = _analysisCache is not null && _analysisScope is not null
+                    ? _analysisCache.TryGetCurrentCard(_config.Settings.CurrentGame, _analysisScope, path)
+                    : null;
+                var result = _scanner.ReadPngPageData(path, cached)
+                    ?? throw new InvalidDataException("无法读取卡片图像");
+                if (_analysisCache is not null && _analysisScope is not null)
+                    _analysisCache.UpsertCard(_config.Settings.CurrentGame, _analysisScope,
+                        CardAnalysisEntry.FromResult(_analysisScope, result));
+                var img = ThumbnailCache.DecodePng(result.ImageData, result.ImageLength);
+                return (result.CharaNames, result.ModIDs, img);
             });
 
             if (currentSelection() != path)

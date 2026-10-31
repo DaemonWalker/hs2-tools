@@ -45,6 +45,7 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly GameLauncherService _launcher;
     private readonly SideloadDatabaseService _sideloadDb;
     private readonly Func<ISideloaderService> _sideloaderFactory;
+    private readonly AnalysisCacheService? _analysisCache;
 
     private ISideloaderService? _currentSideloader;
     private bool _stopRequested;
@@ -58,7 +59,8 @@ public partial class MainWindowViewModel : ObservableObject
         DownloadManager downloads,
         GameLauncherService launcher,
         SideloadDatabaseService sideloadDb,
-        Func<ISideloaderService> sideloaderFactory)
+        Func<ISideloaderService> sideloaderFactory,
+        AnalysisCacheService? analysisCache = null)
     {
         _config = config;
         _scanner = scanner;
@@ -66,6 +68,7 @@ public partial class MainWindowViewModel : ObservableObject
         _launcher = launcher;
         _sideloadDb = sideloadDb;
         _sideloaderFactory = sideloaderFactory;
+        _analysisCache = analysisCache;
 
         _loadedGameId = config.Settings.CurrentGame;
         GameSwitchItems = new(GameProfiles.All.Select(p =>
@@ -269,11 +272,11 @@ public partial class MainWindowViewModel : ObservableObject
             ScanStep = 1;
             ModScanDone = true;
 
-            var sceneUsage = await ScanPngUsageAsync(_config.GetSceneDir()!, p => SceneScanProgress = p);
+            var sceneUsage = await ScanPngUsageAsync(_config.GetSceneDir()!, "scene", p => SceneScanProgress = p);
             ScanStep = 2;
             SceneScanDone = true;
 
-            var charaUsage = await ScanPngUsageAsync(_config.GetCharaDir()!, p => CharaScanProgress = p);
+            var charaUsage = await ScanPngUsageAsync(_config.GetCharaDir()!, "chara", p => CharaScanProgress = p);
             ScanStep = 3;
             CharaScanDone = true;
 
@@ -334,11 +337,32 @@ public partial class MainWindowViewModel : ObservableObject
         var result = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
         var unusedResult = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<ModScanEntry>();
+        var gameId = _config.Settings.CurrentGame;
+        var cachedMods = _analysisCache?.GetZipMods(gameId, "mods") ?? new(StringComparer.OrdinalIgnoreCase);
+        var cachedUnused = _analysisCache?.GetZipMods(gameId, "unused") ?? new(StringComparer.OrdinalIgnoreCase);
+        var validatedMods = new System.Collections.Concurrent.ConcurrentDictionary<string, ZipModAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
+        var validatedUnused = new System.Collections.Concurrent.ConcurrentDictionary<string, ZipModAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
+        var newCacheMods = new List<ZipModAnalysisEntry>();
+        var newCacheUnused = new List<ZipModAnalysisEntry>();
         var scanned = 0;
         foreach (var (batch, isUnused) in Batches(files, false).Concat(Batches(unusedFiles, true)))
         {
-            var batchEntries = await _scanner.ReadZipModBatchListAsync(batch, onError: LogScanError);
+            var scope = isUnused ? "unused" : "mods";
+            var cached = isUnused ? cachedUnused : cachedMods;
+            var validated = isUnused ? validatedUnused : validatedMods;
+            var batchEntries = await _scanner.ReadZipModBatchListAsync(batch, onError: LogScanError,
+                tryGetCached: path =>
+                {
+                    if (cached.TryGetValue(path, out var entry) &&
+                        AnalysisCacheService.IsCurrent(path, entry.FileLength, entry.LastWriteTimeUtcTicks))
+                    {
+                        validated[path] = entry;
+                        return entry;
+                    }
+                    return null;
+                });
             var target = isUnused ? unusedResult : result;
+            var cacheTarget = isUnused ? newCacheUnused : newCacheMods;
             // 跨批合并同 guid：按去重规则裁决取最优（与 ReadZipModBatchAsync 批内口径一致）；
             // 完整列表逐条留存（重复 guid 不折叠），供去重/整理复用
             foreach (var (guid, info) in batchEntries)
@@ -346,9 +370,30 @@ public partial class MainWindowViewModel : ObservableObject
                 entries.Add(new ModScanEntry { Guid = guid, Info = info });
                 if (!target.TryGetValue(guid, out var existing) || ScannerService.CompareModsForKeep(info, existing) < 0)
                     target[guid] = info;
+                if (_analysisCache is not null)
+                {
+                    try
+                    {
+                        cacheTarget.Add(validated.TryGetValue(info.Path, out var hit)
+                            ? hit
+                            : ZipModAnalysisEntry.Create(scope, guid, info));
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorLog.Log($"Mod 缓存指纹读取失败: {info.Path}: {ex.Message}");
+                    }
+                }
             }
             scanned += batch.Count;
             ModScanProgress = $"{scanned}/{total}";
+        }
+        if (_analysisCache is not null)
+        {
+            await Task.Run(() =>
+            {
+                _analysisCache.ReplaceZipMods(gameId, "mods", newCacheMods);
+                _analysisCache.ReplaceZipMods(gameId, "unused", newCacheUnused);
+            });
         }
         return (result, unusedResult, entries);
 
@@ -404,24 +449,44 @@ public partial class MainWindowViewModel : ObservableObject
         return (movedPairs.Count, failed);
     }
 
-    /// <summary>阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数</summary>
-    private async Task<Dictionary<string, int>> ScanPngUsageAsync(string dir, Action<string> report)
+    /// <summary>阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数，未变化卡片直接复用缓存。</summary>
+    private async Task<Dictionary<string, int>> ScanPngUsageAsync(string dir, string scope, Action<string> report)
     {
         var files = _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".png" } });
         report($"0/{files.Count}");
 
+        var gameId = _config.Settings.CurrentGame;
+        var cached = _analysisCache?.GetCards(gameId, scope) ?? new(StringComparer.OrdinalIgnoreCase);
+        var validated = new System.Collections.Concurrent.ConcurrentDictionary<string, CardAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
+        var cacheEntries = new List<CardAnalysisEntry>();
         var usage = new Dictionary<string, int>();
         for (var i = 0; i < files.Count; i += BatchSize)
         {
             var batch = files.GetRange(i, Math.Min(BatchSize, files.Count - i));
-            var batchResults = await _scanner.ReadPngModsBatchAsync(batch, onError: LogScanError);
+            var batchResults = await _scanner.ReadPngDataBatchAsync(batch, onError: LogScanError,
+                tryGetCached: path =>
+                {
+                    if (cached.TryGetValue(path, out var entry) &&
+                        AnalysisCacheService.IsCurrent(path, entry.FileLength, entry.LastWriteTimeUtcTicks))
+                    {
+                        validated[path] = entry;
+                        return entry.ToResult();
+                    }
+                    return null;
+                });
             foreach (var item in batchResults)
             {
                 foreach (var modId in item.ModIDs)
                     usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
+                if (_analysisCache is not null)
+                    cacheEntries.Add(validated.TryGetValue(item.Path, out var hit)
+                        ? hit
+                        : CardAnalysisEntry.FromResult(scope, item));
             }
             report($"{Math.Min(i + BatchSize, files.Count)}/{files.Count}");
         }
+        if (_analysisCache is not null)
+            await Task.Run(() => _analysisCache.ReplaceCards(gameId, scope, cacheEntries));
         return usage;
     }
 

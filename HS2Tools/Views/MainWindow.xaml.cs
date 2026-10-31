@@ -23,7 +23,7 @@ public partial class MainWindow : Window
 
         var vm = new MainWindowViewModel(
             services.Config, services.Scanner, services.Downloads,
-            services.GameLauncher, services.SideloadDb, services.CreateSideloader);
+            services.GameLauncher, services.SideloadDb, services.CreateSideloader, services.AnalysisCache);
         DataContext = vm;
         SubscribeConfirmations(vm);
 

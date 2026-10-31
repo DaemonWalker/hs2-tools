@@ -173,6 +173,34 @@ public class SceneOrganizeViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAll_SharedAnalysis_DoesNotMoveSameSceneTwice()
+    {
+        var gameDir = MakeGameDir();
+        WriteScene(gameDir, "s1.png", "角色甲");
+        using var config = new ConfigService(_dir);
+        config.Update(s => s.Current.GamePath = gameDir);
+        var vm = new SceneOrganizeViewModel(config, new ScannerService())
+        {
+            CharInput = "角色",
+            FolderInput = "合集甲",
+        };
+        vm.AddTaskCommand.Execute(null);
+        vm.CharInput = "角色甲";
+        vm.FolderInput = "合集乙";
+        vm.AddTaskCommand.Execute(null);
+        var completed = 0;
+        vm.OrganizeCompleted += (_, _) => completed++;
+
+        await vm.ExecuteAllCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, vm.Tasks[0].ResultCount);
+        Assert.Equal(0, vm.Tasks[1].ResultCount);
+        Assert.Equal(1, completed);
+        Assert.True(File.Exists(Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative, "hs_tools_合集甲", "s1.png")));
+        Assert.False(File.Exists(Path.Combine(gameDir, GameProfiles.Hs2.SceneDirRelative, "hs_tools_合集乙", "s1.png")));
+    }
+
+    [Fact]
     public void RemoveTask_And_Clear()
     {
         using var config = new ConfigService(_dir);

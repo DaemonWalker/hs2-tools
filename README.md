@@ -16,7 +16,8 @@
 - **框架**: .NET 8 LTS + WPF（`net8.0-windows`），MVVM（CommunityToolkit.Mvvm）
 - **HTML 解析**: HtmlAgilityPack
 - **卡片/场景解析**: MessagePack-CSharp（`【AIS_Chara】` BlockHeader + KKEx 结构化解析，基准 IllusionModdingAPI/BepisPlugins）
-- **测试**: xUnit（211 项：解析器回归、VM 测试、真实环境基准）
+- **增量分析缓存**: Microsoft.Data.Sqlite（按文件大小与修改时间复用未变化的 Mod/卡片分析结果）
+- **测试**: xUnit（324 项：解析器回归、VM/缓存测试、真实环境基准）
 
 ## 构建与测试
 

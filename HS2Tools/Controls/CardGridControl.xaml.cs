@@ -35,6 +35,7 @@ public partial class CardGridControl : UserControl
 
     private ConfigService? _config;
     private ScannerService? _scanner;
+    private AnalysisCacheService? _analysisCache;
     private ScrollViewer? _scroller;
     private CancellationTokenSource? _loadCts;
     private bool _isLoadingMore;
@@ -169,6 +170,7 @@ public partial class CardGridControl : UserControl
             {
                 _config = services.Config;
                 _scanner = services.Scanner;
+                _analysisCache = services.AnalysisCache;
                 _config.Changed += OnConfigChanged;
             }
         }
@@ -186,8 +188,12 @@ public partial class CardGridControl : UserControl
             ApplyFilterSortAndReset();
     }
 
-    /// <summary>刷新（对应原版 CardGridRef.reload：清空已加载并重新过滤/排序/分批解析）</summary>
-    public void Reload() => ApplyFilterSortAndReset();
+    /// <summary>显式刷新：使旧缩略图失效并重新分批解析。</summary>
+    public void Reload()
+    {
+        _thumbnailCache.Clear();
+        ApplyFilterSortAndReset();
+    }
 
     private void ApplyCardKindDefaults()
     {
@@ -211,7 +217,6 @@ public partial class CardGridControl : UserControl
             SearchText, SortType, _config?.Settings.Current.Favorites);
         _loadedPaths.Clear();
         _cards.Clear();
-        _thumbnailCache.Clear();
         TotalCount = _sorted.Count;
         _scroller?.ScrollToTop();
         UpdateFooter();
@@ -239,9 +244,27 @@ public partial class CardGridControl : UserControl
 
         try
         {
+            var gameId = _config?.Settings.CurrentGame ?? "";
+            var scope = CardKind == CardKind.Scene ? "scene" : "chara";
             var results = await _scanner.ReadPngPageDataBatchAsync(
-                batch, concurrency: 4, msg => App.LogException(new Exception(msg)), ct);
+                batch, concurrency: 4, msg => App.LogException(new Exception(msg)), ct,
+                tryGetCached: path => _analysisCache?.TryGetCurrentCard(gameId, scope, path));
             var byPath = results.ToDictionary(r => r.Path, StringComparer.OrdinalIgnoreCase);
+            var toDecode = results.Where(r => _thumbnailCache.Get(r.Path) is null).ToList();
+            var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(this).DpiScaleX;
+            var decodeWidth = Math.Max(1, (int)Math.Ceiling(CardItemWidth * dpi));
+            var decoded = await Task.Run(() =>
+            {
+                if (_analysisCache is not null)
+                {
+                    foreach (var result in results)
+                        _analysisCache.UpsertCard(gameId, scope, CardAnalysisEntry.FromResult(scope, result));
+                }
+                return toDecode.ToDictionary(
+                    r => r.Path,
+                    r => ThumbnailCache.DecodePng(r.ImageData, r.ImageLength, decodeWidth),
+                    StringComparer.OrdinalIgnoreCase);
+            }, ct);
 
             foreach (var path in batch) // 按排序顺序追加
             {
@@ -250,12 +273,13 @@ public partial class CardGridControl : UserControl
                 if (!_loadedPaths.Add(path))
                     continue;
                 byPath.TryGetValue(path, out var data);
+                decoded.TryGetValue(path, out var image);
                 _cards.Add(new CardItemViewModel
                 {
                     Path = path,
                     // 原版空名显示空白标题；C# 版回退文件名（解析失败的卡不至于无标识）
-                    DisplayName = data?.Names.FirstOrDefault() ?? CardSortHelper.FileNameKey(path),
-                    Thumbnail = ResolveThumbnail(path, data?.ImageData),
+                    DisplayName = data?.CharaNames.FirstOrDefault() ?? CardSortHelper.FileNameKey(path),
+                    Thumbnail = ResolveThumbnail(path, image),
                     IsFavorite = IsFavoritePath(path),
                     IsSelected = string.Equals(path, SelectedPath, StringComparison.OrdinalIgnoreCase),
                 });
@@ -277,12 +301,12 @@ public partial class CardGridControl : UserControl
         }
     }
 
-    private System.Windows.Media.Imaging.BitmapImage? ResolveThumbnail(string path, string? base64)
+    private System.Windows.Media.Imaging.BitmapImage? ResolveThumbnail(
+        string path, System.Windows.Media.Imaging.BitmapImage? image)
     {
         var cached = _thumbnailCache.Get(path);
         if (cached is not null)
             return cached;
-        var image = ThumbnailCache.DecodeBase64(base64);
         if (image is not null)
             _thumbnailCache.Set(path, image);
         return image;

@@ -32,12 +32,14 @@ public partial class CardExplorerViewModel : ObservableObject
 {
     private readonly ConfigService _config;
     private readonly ScannerService _scanner;
+    private readonly AnalysisCacheService? _analysisCache;
     private int _loadVersion;
 
-    public CardExplorerViewModel(ConfigService config, ScannerService scanner)
+    public CardExplorerViewModel(ConfigService config, ScannerService scanner, AnalysisCacheService? analysisCache = null)
     {
         _config = config;
         _scanner = scanner;
+        _analysisCache = analysisCache;
 
         // 扫描完成（LocalMods 变化）→ 刷新"已拥有"标记（单例服务与窗口同寿，无需退订）
         _config.Changed += (_, _) => UiDispatch.Run(RefreshModLocalState);
@@ -148,10 +150,15 @@ public partial class CardExplorerViewModel : ObservableObject
                 return;
             }
 
+            var scope = IsCharaMode ? "chara" : "scene";
             var (result, image) = await Task.Run(() =>
             {
-                var r = _scanner.ParsePngData(path);
-                var img = ThumbnailCache.DecodeBase64(_scanner.ReadPngImage(path));
+                var cached = _analysisCache?.TryGetCurrentCard(_config.Settings.CurrentGame, scope, path);
+                var r = _scanner.ReadPngPageData(path, cached)
+                    ?? throw new InvalidDataException("无法读取卡片图像");
+                if (_analysisCache is not null)
+                    _analysisCache.UpsertCard(_config.Settings.CurrentGame, scope, CardAnalysisEntry.FromResult(scope, r));
+                var img = ThumbnailCache.DecodePng(r.ImageData, r.ImageLength);
                 return (r, img);
             });
 

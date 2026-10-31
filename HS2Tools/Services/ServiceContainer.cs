@@ -11,6 +11,7 @@ public class ServiceContainer : IDisposable
     public ServiceContainer()
     {
         Config = new ConfigService();
+        AnalysisCache = new AnalysisCacheService(Config.ConfigDir);
         Scanner = new ScannerService();
         Downloads = new DownloadManager(Config.GetProxyString);
         GameLauncher = new GameLauncherService(Config);
@@ -19,6 +20,7 @@ public class ServiceContainer : IDisposable
     }
 
     public ConfigService Config { get; }
+    public AnalysisCacheService AnalysisCache { get; }
     public ScannerService Scanner { get; }
     public DownloadManager Downloads { get; }
     public GameLauncherService GameLauncher { get; }
@@ -32,5 +34,9 @@ public class ServiceContainer : IDisposable
     public ISideloaderService CreateSideloader() =>
         new SideloaderService(Config.GetProxyString(), Config.CurrentProfile.SideloadBaseUrl);
 
-    public void Dispose() => Config.Dispose();
+    public void Dispose()
+    {
+        AnalysisCache.Dispose();
+        Config.Dispose();
+    }
 }

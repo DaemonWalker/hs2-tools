@@ -160,7 +160,7 @@ public class ScannerService
         var offset = GetDataRegionOffset(data);
         if (offset >= 0)
         {
-            var (names, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsSpan(offset));
+            var (names, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsMemory(offset));
             if (structuralOk)
                 return wantNames ? names : NormalizeGuids(modIds);
             ErrorLog.Log($"structural parse failed, fallback to byte scan in data region ({data.Length - offset} bytes)");
@@ -317,8 +317,8 @@ public class ScannerService
         return -1;
     }
 
-    /// <summary>解析 PNG 文件的完整数据（用于单卡查看器）</summary>
-    public PngParseResult ParsePngData(string filePath)
+    /// <summary>一次读盘解析 PNG 的名称、Mod、数据区信息，并按需保留图像字节。</summary>
+    public PngParseResult ParsePngData(string filePath, bool includeImage = false)
     {
         if (!FileExists(filePath))
             throw new InvalidDataException("not a valid PNG file");
@@ -327,7 +327,7 @@ public class ScannerService
         var offset = FindPngEnd(data);
         if (offset < 0)
             throw new InvalidDataException("IEND marker not found");
-        var (names, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsSpan(offset));
+        var (names, modIds, structuralOk) = CharaCardParser.ParseDataRegion(data.AsMemory(offset));
         if (!structuralOk)
         {
             ErrorLog.Log($"ParsePngData structural parse failed, fallback to byte scan: {filePath}");
@@ -338,11 +338,39 @@ public class ScannerService
 
         return new PngParseResult
         {
+            Path = filePath,
             ModIDs = NormalizeGuids(modIds),
             CharaNames = names,
-            // 真正的追加数据长度（真 IEND chunk 之后），下界钳 0
             GameDataLen = Math.Max(0, data.Length - offset),
+            ImageData = includeImage ? data : Array.Empty<byte>(),
+            ImageLength = includeImage ? offset : 0,
+            FileLength = data.Length,
+            LastWriteTimeUtcTicks = File.GetLastWriteTimeUtc(filePath).Ticks,
         };
+    }
+
+    /// <summary>批量取得完整卡片元数据；命中有效缓存时不再读盘。</summary>
+    public async Task<List<PngParseResult>> ReadPngDataBatchAsync(
+        IReadOnlyList<string> filePaths, int concurrency = 8, Action<string>? onError = null,
+        CancellationToken ct = default, Func<string, PngParseResult?>? tryGetCached = null)
+    {
+        if (concurrency <= 0)
+            concurrency = 8;
+        var results = new ConcurrentBag<PngParseResult>();
+        await Parallel.ForEachAsync(filePaths, new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = ct }, (path, _) =>
+        {
+            try
+            {
+                var result = tryGetCached?.Invoke(path) ?? ParsePngData(path);
+                results.Add(result);
+            }
+            catch (Exception ex)
+            {
+                onError?.Invoke($"ParsePngData failed: {path}: {ex.Message}");
+            }
+            return ValueTask.CompletedTask;
+        });
+        return results.ToList();
     }
 
     /// <summary>批量提取 Mod GUID（默认并发 8）。单文件失败跳过（记日志）</summary>
@@ -411,49 +439,41 @@ public class ScannerService
         return results.ToList();
     }
 
-    /// <summary>
-    /// 单文件页面数据（名称+缩略图）。
-    /// C# 版一次读盘同时取两者（修掉原版同一文件读盘 2 次的问题）。
-    /// 返回 null 表示读盘失败（对应原版 nameErr != nil → 跳过该文件）。
-    /// </summary>
-    public PngPageDataResult? ReadPngPageData(string filePath)
+    /// <summary>单文件页面数据：一次读盘同时取得名称、Mod 和原始 PNG 字节。</summary>
+    public PngParseResult? ReadPngPageData(string filePath, PngParseResult? cached = null)
     {
-        var names = new List<string>();
-        var image = "";
-
-        if (FileExists(filePath))
+        try
         {
-            byte[] data;
-            try
-            {
-                data = File.ReadAllBytes(filePath);
-            }
-            catch
-            {
+            if (cached is null)
+                return ParsePngData(filePath, includeImage: true);
+            var data = File.ReadAllBytes(filePath);
+            var offset = FindPngEnd(data);
+            if (offset < 0)
                 return null;
-            }
-            names = ExtractFromGameData(data, wantNames: true);
-            var end = FindPngEnd(data);
-            if (end >= 0)
-            {
-                // 缩略图 = 真 IEND chunk（含 CRC）为止的完整 PNG
-                image = Convert.ToBase64String(data, 0, end);
-            }
+            cached.ImageData = data;
+            cached.ImageLength = offset;
+            cached.GameDataLen = Math.Max(0, data.Length - offset);
+            cached.FileLength = data.Length;
+            cached.LastWriteTimeUtcTicks = File.GetLastWriteTimeUtc(filePath).Ticks;
+            return cached;
         }
-
-        return new PngPageDataResult { Path = filePath, Names = names, ImageData = image };
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>批量获取页面数据（默认并发 4）。读盘失败的文件跳过（记日志）</summary>
-    public async Task<List<PngPageDataResult>> ReadPngPageDataBatchAsync(
-        IReadOnlyList<string> filePaths, int concurrency = 4, Action<string>? onError = null, CancellationToken ct = default)
+    public async Task<List<PngParseResult>> ReadPngPageDataBatchAsync(
+        IReadOnlyList<string> filePaths, int concurrency = 4, Action<string>? onError = null,
+        CancellationToken ct = default, Func<string, PngParseResult?>? tryGetCached = null)
     {
         if (concurrency <= 0)
             concurrency = 4;
-        var results = new ConcurrentBag<PngPageDataResult>();
+        var results = new ConcurrentBag<PngParseResult>();
         await Parallel.ForEachAsync(filePaths, new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = ct }, (path, _) =>
         {
-            var result = ReadPngPageData(path);
+            var result = ReadPngPageData(path, tryGetCached?.Invoke(path));
             if (result != null)
                 results.Add(result);
             else
@@ -480,6 +500,21 @@ public class ScannerService
     /// <summary>规范化 Mod GUID：保留 Unicode，移除控制字符并清理首尾空白</summary>
     internal static string NormalizeGuid(string str)
     {
+        var alreadyTrimmed = str.AsSpan().Trim().Length == str.Length;
+        if (alreadyTrimmed)
+        {
+            var hasControl = false;
+            foreach (var r in str.EnumerateRunes())
+            {
+                if (!Rune.IsControl(r))
+                    continue;
+                hasControl = true;
+                break;
+            }
+            if (!hasControl)
+                return str;
+        }
+
         var sb = new StringBuilder(str.Length);
         foreach (var r in str.EnumerateRunes())
         {
@@ -532,38 +567,42 @@ public class ScannerService
         var c = CompareVersions(a.Version, b.Version);
         if (c != 0)
             return -c; // 版本高者优
-        c = GetFileSize(a.Path).CompareTo(GetFileSize(b.Path));
+        c = GetFileSize(a).CompareTo(GetFileSize(b));
         if (c != 0)
             return -c; // 体积大者优
-        c = GetLastWriteTime(a.Path).CompareTo(GetLastWriteTime(b.Path));
+        c = GetLastWriteTimeUtcTicks(a).CompareTo(GetLastWriteTimeUtcTicks(b));
         if (c != 0)
             return -c; // 日期新者优
         return string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static long GetFileSize(string path)
+    private static long GetFileSize(ModInfo mod)
     {
+        if (mod.FileLength > 0)
+            return mod.FileLength;
         try
         {
-            return new FileInfo(path).Length;
+            return new FileInfo(mod.Path).Length;
         }
         catch (Exception ex)
         {
-            ErrorLog.Log($"GetFileSize failed: {path}: {ex.Message}");
+            ErrorLog.Log($"GetFileSize failed: {mod.Path}: {ex.Message}");
             return 0;
         }
     }
 
-    private static DateTime GetLastWriteTime(string path)
+    private static long GetLastWriteTimeUtcTicks(ModInfo mod)
     {
+        if (mod.LastWriteTimeUtcTicks > 0)
+            return mod.LastWriteTimeUtcTicks;
         try
         {
-            return File.GetLastWriteTime(path);
+            return File.GetLastWriteTimeUtc(mod.Path).Ticks;
         }
         catch (Exception ex)
         {
-            ErrorLog.Log($"GetLastWriteTime failed: {path}: {ex.Message}");
-            return DateTime.MinValue;
+            ErrorLog.Log($"GetLastWriteTime failed: {mod.Path}: {ex.Message}");
+            return 0;
         }
     }
 
@@ -612,6 +651,16 @@ public class ScannerService
                 throw new InvalidDataException("manifest.xml missing guid field");
 
             var cleanName = CleanString(GetElementValue(doc.Root, "name") ?? "");
+            long fileLength = 0, lastWriteTicks = 0;
+            try
+            {
+                fileLength = new FileInfo(filePath).Length;
+                lastWriteTicks = File.GetLastWriteTimeUtc(filePath).Ticks;
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Log($"ReadZipMod metadata failed: {filePath}: {ex.Message}");
+            }
 
             return new Dictionary<string, ModInfo>
             {
@@ -620,6 +669,8 @@ public class ScannerService
                     Name = cleanName,
                     Version = GetElementValue(doc.Root, "version") ?? "", // Version 不清洗
                     Path = filePath,
+                    FileLength = fileLength,
+                    LastWriteTimeUtcTicks = lastWriteTicks,
                     ShaderNames = GetShaderNames(doc.Root),
                 },
             };
@@ -667,7 +718,8 @@ public class ScannerService
 
     /// <summary>批量解析 zipmod 文件（默认并发 4），返回全部 (guid, ModInfo) 列表（不折叠重复 guid）。单文件失败跳过（记日志）</summary>
     public async Task<List<KeyValuePair<string, ModInfo>>> ReadZipModBatchListAsync(
-        IReadOnlyList<string> filePaths, int concurrency = 4, Action<string>? onError = null, CancellationToken ct = default)
+        IReadOnlyList<string> filePaths, int concurrency = 4, Action<string>? onError = null,
+        CancellationToken ct = default, Func<string, ZipModAnalysisEntry?>? tryGetCached = null)
     {
         if (concurrency <= 0)
             concurrency = 4;
@@ -676,8 +728,15 @@ public class ScannerService
         {
             try
             {
-                foreach (var kv in ReadZipMod(path))
-                    results.Add(kv);
+                if (tryGetCached?.Invoke(path) is { } cached)
+                {
+                    results.Add(new KeyValuePair<string, ModInfo>(cached.Guid, cached.Info));
+                }
+                else
+                {
+                    foreach (var kv in ReadZipMod(path))
+                        results.Add(kv);
+                }
             }
             catch (Exception ex)
             {

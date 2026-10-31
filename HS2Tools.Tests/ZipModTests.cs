@@ -24,6 +24,8 @@ public class ZipModTests : IDisposable
         Assert.Equal("Mod", info.Value.Name); // 中文被 cleanString 截掉
         Assert.Equal("1.2.3", info.Value.Version);
         Assert.Equal(path, info.Value.Path);
+        Assert.Equal(new FileInfo(path).Length, info.Value.FileLength);
+        Assert.True(info.Value.LastWriteTimeUtcTicks > 0);
     }
 
     [Fact]

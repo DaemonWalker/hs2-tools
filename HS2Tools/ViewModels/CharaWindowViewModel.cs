@@ -21,13 +21,14 @@ public partial class CharaWindowViewModel : ObservableObject
         ScannerService scanner,
         DownloadManager downloads,
         SideloadDatabaseService sideloadDb,
-        GameLauncherService launcher)
+        GameLauncherService launcher,
+        AnalysisCacheService? analysisCache = null)
     {
         _config = config;
         _scanner = scanner;
         _loadedGameId = config.Settings.CurrentGame;
         _loadedGamePath = config.Settings.Current.GamePath;
-        Detail = new CardDetailViewModel(config, scanner, downloads, sideloadDb, launcher);
+        Detail = new CardDetailViewModel(config, scanner, downloads, sideloadDb, launcher, analysisCache, "chara");
         _config.Changed += (_, _) => UiDispatch.Run(ReloadIfGameContextChanged);
     }
 

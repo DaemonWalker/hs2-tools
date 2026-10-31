@@ -224,6 +224,13 @@ public class ScannerTests : IDisposable
     }
 
     [Fact]
+    public void NormalizeGuid_CleanInput_ReusesOriginalString()
+    {
+        const string guid = "com.example.mod";
+        Assert.Same(guid, ScannerService.NormalizeGuid(guid));
+    }
+
+    [Fact]
     public void ReadPngMods_KkexNamespaceIsolation()
     {
         // 其他插件数据里含同名 "ModID" 键：不得误报（KKEx 插件 ID 命名空间隔离）
@@ -467,8 +474,9 @@ public class ScannerTests : IDisposable
         Assert.Equal(2, results.Count);
         Assert.All(results, r =>
         {
-            Assert.Single(r.Names);
-            Assert.NotEqual("", r.ImageData);
+            Assert.Single(r.CharaNames);
+            Assert.True(r.ImageLength > 0);
+            Assert.Equal(r.ImageLength, r.ImageData.Length - r.GameDataLen);
         });
     }
 

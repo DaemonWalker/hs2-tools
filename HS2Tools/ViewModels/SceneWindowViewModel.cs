@@ -21,14 +21,15 @@ public partial class SceneWindowViewModel : ObservableObject
         ScannerService scanner,
         DownloadManager downloads,
         SideloadDatabaseService sideloadDb,
-        GameLauncherService launcher)
+        GameLauncherService launcher,
+        AnalysisCacheService? analysisCache = null)
     {
         _config = config;
         _scanner = scanner;
         _loadedGameId = config.Settings.CurrentGame;
         _loadedGamePath = config.Settings.Current.GamePath;
-        Detail = new CardDetailViewModel(config, scanner, downloads, sideloadDb, launcher);
-        Organize = new SceneOrganizeViewModel(config, scanner);
+        Detail = new CardDetailViewModel(config, scanner, downloads, sideloadDb, launcher, analysisCache, "scene");
+        Organize = new SceneOrganizeViewModel(config, scanner, analysisCache);
         // 整理完成 → 重扫场景目录（对应原版 onOrganizeComplete → cardGrid.reload）
         Organize.OrganizeCompleted += (_, _) => LoadCardPaths();
         _config.Changed += (_, _) => UiDispatch.Run(ReloadIfGameContextChanged);

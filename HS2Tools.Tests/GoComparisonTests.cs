@@ -246,7 +246,7 @@ public class GoComparisonTests : IDisposable
                     continue;
 
                 // 结构解析不得向外抛异常（blob 失败应内部消化并记 ErrorLog）
-                var (names, modIds, ok) = CharaCardParser.ParseDataRegion(data.AsSpan(offset));
+                var (names, modIds, ok) = CharaCardParser.ParseDataRegion(data.AsMemory(offset));
                 if (ok)
                     structuralOk++;
 

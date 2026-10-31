@@ -20,7 +20,7 @@ public partial class CharaView : UserControl
         if (App.Services is not { } s)
             return;
 
-        var vm = new CharaWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher);
+        var vm = new CharaWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher, s.AnalysisCache);
         DataContext = vm;
         vm.LoadCardPaths();
     }
@@ -28,6 +28,9 @@ public partial class CharaView : UserControl
     private void Refresh_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is CharaWindowViewModel vm)
+        {
             vm.LoadCardPaths();
+            Grid.Reload();
+        }
     }
 }

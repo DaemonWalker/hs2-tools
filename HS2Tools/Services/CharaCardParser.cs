@@ -65,6 +65,17 @@ internal static class CharaCardParser
     // KKEx trailer 定位标记（块名固定为 "KKEx"，各游戏相同）
     private static readonly byte[] KkexMark = "KKEx"u8.ToArray();
 
+    private sealed class OrderedStrings
+    {
+        private readonly HashSet<string> _seen = new();
+        public List<string> Values { get; } = new();
+        public void Add(string value)
+        {
+            if (_seen.Add(value))
+                Values.Add(value);
+        }
+    }
+
     /// <summary>
     /// 解析数据区（真 IEND chunk 之后的部分，见 ScannerService.GetDataRegionOffset）。
     /// 单卡 1 个 blob、场景 N 个内嵌 blob，统一处理；末尾再尝试 KKEx trailer。
@@ -72,14 +83,14 @@ internal static class CharaCardParser
     /// 全部 blob 失败或无标记 → StructuralOk=false（调用方走回退路径）。
     /// </summary>
     public static (List<string> Names, List<string> ModIDs, bool StructuralOk) ParseDataRegion(
-        ReadOnlySpan<byte> region)
+        ReadOnlyMemory<byte> region)
     {
-        var names = new List<string>();
-        var modIds = new List<string>();
+        var names = new OrderedStrings();
+        var modIds = new OrderedStrings();
         var blobFound = 0;
         var blobOk = 0;
 
-        foreach (var (pos, marker, format) in FindMarkers(region))
+        foreach (var (pos, marker, format) in FindMarkers(region.Span))
         {
             blobFound++;
             try
@@ -96,15 +107,14 @@ internal static class CharaCardParser
         // 场景/坐标卡级扩展数据 trailer（解析失败不视为整体失败）
         try
         {
-            foreach (var id in ParseKkexTrailer(region))
-                AddDistinct(modIds, id);
+            ParseKkexTrailer(region, modIds);
         }
         catch (Exception ex)
         {
             ErrorLog.Log($"CharaCardParser KKEx trailer parse failed: {ex.Message}");
         }
 
-        return (names, modIds, blobFound > 0 && blobOk > 0);
+        return (names.Values, modIds.Values, blobFound > 0 && blobOk > 0);
     }
 
     // ==================== blob 定位 ====================
@@ -138,13 +148,14 @@ internal static class CharaCardParser
 
     // ==================== ChaFile blob ====================
 
-    private static void ParseCharaBlob(ReadOnlySpan<byte> region, int markerPos, byte[] marker, CardFormat format,
-        List<string> names, List<string> modIds)
+    private static void ParseCharaBlob(ReadOnlyMemory<byte> region, int markerPos, byte[] marker, CardFormat format,
+        OrderedStrings names, OrderedStrings modIds)
     {
+        var span = region.Span;
         // blob 起点 = 标记前 1 字节 7bit 长度前缀 + 前 4 字节 int32 loadProductNo
         if (markerPos < 5)
             throw new InvalidDataException("no room for length prefix + productNo");
-        if (region[markerPos - 1] != marker.Length)
+        if (span[markerPos - 1] != marker.Length)
             throw new InvalidDataException("marker length prefix mismatch");
 
         // 坐标卡（ChaFileCoordinate）：无 Parameter/KKEx 块，mod 数据在文件尾 KKEx trailer
@@ -152,27 +163,27 @@ internal static class CharaCardParser
             return;
 
         var p = markerPos + marker.Length;
-        _ = Read7BitString(region, ref p); // ChaFileVersion
+        _ = Read7BitString(span, ref p); // ChaFileVersion
         if (format.HasFacePng)
         {
             // KK/KKS：version 之后是脸部特写 PNG（int32 长度 + 字节），随后直接是 BlockHeader，
             // 无 HS2 的 lang/userID/dataID（基准 kkloader KoikatuCharaData；真实卡实测确认）
-            var faceLen = ReadInt32LE(region, ref p);
+            var faceLen = ReadInt32LE(span, ref p);
             if (faceLen < 0 || faceLen > region.Length - p)
                 throw new InvalidDataException("face png length out of bounds");
             p += faceLen;
         }
         else
         {
-            _ = ReadInt32LE(region, ref p);    // lang
-            _ = Read7BitString(region, ref p); // userID
-            _ = Read7BitString(region, ref p); // dataID
+            _ = ReadInt32LE(span, ref p);    // lang
+            _ = Read7BitString(span, ref p); // userID
+            _ = Read7BitString(span, ref p); // dataID
         }
 
-        var headerLen = ReadInt32LE(region, ref p);
+        var headerLen = ReadInt32LE(span, ref p);
         if (headerLen <= 0 || headerLen > region.Length - p)
             throw new InvalidDataException("block header length out of bounds");
-        var infos = ParseBlockHeader(new ReadOnlySequence<byte>(region.Slice(p, headerLen).ToArray()));
+        var infos = ParseBlockHeader(new ReadOnlySequence<byte>(region.Slice(p, headerLen)));
         p += headerLen;
 
         if (p + 8 > region.Length)
@@ -186,18 +197,17 @@ internal static class CharaCardParser
                 continue;
             if (info.Pos < 0 || info.Size < 0 || info.Size > region.Length - blocksStart - info.Pos)
                 throw new InvalidDataException($"block {info.Name} pos/size out of bounds");
-            var seq = new ReadOnlySequence<byte>(region.Slice(blocksStart + (int)info.Pos, (int)info.Size).ToArray());
+            var seq = new ReadOnlySequence<byte>(region.Slice(blocksStart + (int)info.Pos, (int)info.Size));
 
             if (info.Name == "KKEx")
             {
-                foreach (var id in ExtractUarModIds(seq))
-                    AddDistinct(modIds, id);
+                ExtractUarModIds(seq, modIds);
             }
             else
             {
                 var name = ReadName(seq, format.NameKeys);
                 if (!string.IsNullOrWhiteSpace(name))
-                    AddDistinct(names, name);
+                    names.Add(name);
             }
         }
     }
@@ -290,9 +300,8 @@ internal static class CharaCardParser
     /// 值为 array of bin，每个 bin 是一条 ResolveInfo 的 msgpack map（字符串键），取 "ModID" 的字符串值。
     /// 场景地图 mod 的 GUID 直接挂在 data["mapInfoGUID"] 字符串值上（真实场景卡实测）。
     /// </summary>
-    private static List<string> ExtractUarModIds(ReadOnlySequence<byte> seq)
+    private static void ExtractUarModIds(ReadOnlySequence<byte> seq, OrderedStrings result)
     {
-        var result = new List<string>();
         var reader = new MessagePackReader(seq);
         var pluginCount = reader.ReadMapHeader();
         for (var i = 0; i < pluginCount; i++)
@@ -314,10 +323,9 @@ internal static class CharaCardParser
                     reader.Skip();
             }
         }
-        return result;
     }
 
-    private static void ReadResolveInfos(ref MessagePackReader reader, List<string> result)
+    private static void ReadResolveInfos(ref MessagePackReader reader, OrderedStrings result)
     {
         var mapCount = reader.ReadMapHeader();
         for (var i = 0; i < mapCount; i++)
@@ -328,7 +336,7 @@ internal static class CharaCardParser
             {
                 var guid = reader.ReadString();
                 if (!string.IsNullOrEmpty(guid))
-                    AddDistinct(result, guid);
+                    result.Add(guid);
                 continue;
             }
             // "info" = 角色/坐标卡；"itemInfo"/"patternInfo" = 工作室场景物件/图案（真实场景卡实测）
@@ -353,7 +361,7 @@ internal static class CharaCardParser
                 {
                     var modId = ReadResolveInfoModId(bin.Value);
                     if (!string.IsNullOrEmpty(modId))
-                        AddDistinct(result, modId);
+                        result.Add(modId);
                 }
                 catch (Exception ex)
                 {
@@ -384,26 +392,26 @@ internal static class CharaCardParser
     /// 在数据区内暴力扫描 "KKEx" 字节出现处（参考实现的场景导入同样扫字节），
     /// 校验 7bit 前缀、version 合理、length 终点与数据区末尾吻合才算命中。
     /// </summary>
-    private static List<string> ParseKkexTrailer(ReadOnlySpan<byte> region)
+    private static void ParseKkexTrailer(ReadOnlyMemory<byte> region, OrderedStrings result)
     {
-        var result = new List<string>();
+        var span = region.Span;
         var pos = 0;
         while (true)
         {
-            var idx = region[pos..].IndexOf(KkexMark);
+            var idx = span[pos..].IndexOf(KkexMark);
             if (idx < 0)
                 break;
             idx += pos;
             pos = idx + 1;
 
             // 7bit 长度前缀（"KKEx" 长度 4，单字节前缀）
-            if (idx < 1 || region[idx - 1] != KkexMark.Length)
+            if (idx < 1 || span[idx - 1] != KkexMark.Length)
                 continue;
             var p = idx + KkexMark.Length;
             if (p + 8 > region.Length)
                 continue;
-            var version = BitConverter.ToInt32(region.Slice(p, 4));
-            var length = BitConverter.ToInt32(region.Slice(p + 4, 4));
+            var version = BitConverter.ToInt32(span.Slice(p, 4));
+            var length = BitConverter.ToInt32(span.Slice(p + 4, 4));
             p += 8;
             if (version < 0 || version > 1000)
                 continue;
@@ -411,12 +419,10 @@ internal static class CharaCardParser
             if (length <= 0 || p + length != region.Length)
                 continue;
 
-            var seq = new ReadOnlySequence<byte>(region.Slice(p, length).ToArray());
-            foreach (var id in ExtractUarModIds(seq))
-                AddDistinct(result, id);
+            var seq = new ReadOnlySequence<byte>(region.Slice(p, length));
+            ExtractUarModIds(seq, result);
             break; // 命中合法 trailer 即停
         }
-        return result;
     }
 
     // ==================== 基础读取 ====================
@@ -457,10 +463,4 @@ internal static class CharaCardParser
         return v;
     }
 
-    /// <summary>按出现顺序去重（不用 HashSet 无序语义）</summary>
-    private static void AddDistinct(List<string> list, string value)
-    {
-        if (!list.Contains(value))
-            list.Add(value);
-    }
 }

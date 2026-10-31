@@ -69,17 +69,35 @@ public class ThumbnailCache
         try
         {
             var bytes = Convert.FromBase64String(base64);
+            return DecodePng(bytes, bytes.Length);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>PNG 字节 → BitmapImage；可选按显示宽度解码以降低内存占用。</summary>
+    public static BitmapImage? DecodePng(byte[]? data, int length, int decodePixelWidth = 0)
+    {
+        if (data is null || length <= 0 || length > data.Length)
+            return null;
+        try
+        {
+            using var stream = new MemoryStream(data, 0, length, writable: false);
             var image = new BitmapImage();
             image.BeginInit();
-            image.CacheOption = BitmapCacheOption.OnLoad; // 立即解码，流随即释放
-            image.StreamSource = new MemoryStream(bytes);
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            if (decodePixelWidth > 0)
+                image.DecodePixelWidth = decodePixelWidth;
+            image.StreamSource = stream;
             image.EndInit();
             image.Freeze();
             return image;
         }
         catch
         {
-            return null; // 乱码/截断卡片按"暂无预览"处理（对应原版 img onError）
+            return null;
         }
     }
 }

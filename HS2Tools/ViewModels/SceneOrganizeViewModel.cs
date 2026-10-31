@@ -103,11 +103,13 @@ public partial class SceneOrganizeViewModel : ObservableObject
 
     private readonly ConfigService _config;
     private readonly ScannerService _scanner;
+    private readonly AnalysisCacheService? _analysisCache;
 
-    public SceneOrganizeViewModel(ConfigService config, ScannerService scanner)
+    public SceneOrganizeViewModel(ConfigService config, ScannerService scanner, AnalysisCacheService? analysisCache = null)
     {
         _config = config;
         _scanner = scanner;
+        _analysisCache = analysisCache;
     }
 
     /// <summary>有任务完成（窗口据此刷新网格）</summary>
@@ -194,15 +196,14 @@ public partial class SceneOrganizeViewModel : ObservableObject
 
     private bool CanExecuteAll() => !IsProcessing && Tasks.Any(t => t.Status == OrganizeTaskStatus.Pending);
 
-    /// <summary>执行所有待执行任务（串行，与原版一致）</summary>
+    /// <summary>所有待执行任务共享一次扫描和解析，移动仍按任务顺序执行。</summary>
     [RelayCommand(CanExecute = nameof(CanExecuteAll))]
     private async Task ExecuteAllAsync()
     {
         IsProcessing = true;
         try
         {
-            foreach (var task in Tasks.Where(t => t.Status == OrganizeTaskStatus.Pending).ToList())
-                await RunTaskAsync(task);
+            await RunTasksAsync(Tasks.Where(t => t.Status == OrganizeTaskStatus.Pending).ToList());
         }
         finally
         {
@@ -211,85 +212,132 @@ public partial class SceneOrganizeViewModel : ObservableObject
         }
     }
 
-    internal async Task RunTaskAsync(OrganizeTaskViewModel task)
+    internal Task RunTaskAsync(OrganizeTaskViewModel task) => RunTasksAsync(new[] { task });
+
+    private async Task RunTasksAsync(IReadOnlyList<OrganizeTaskViewModel> tasks)
     {
+        if (tasks.Count == 0)
+            return;
         var sceneDir = _config.GetSceneDir();
         if (sceneDir is null)
         {
-            // 未设游戏路径时给出明确错误（原来静默无反应）
-            task.Status = OrganizeTaskStatus.Error;
-            task.Error = "未设置游戏路径，请先在首页设置游戏目录";
+            foreach (var task in tasks)
+            {
+                task.Status = OrganizeTaskStatus.Error;
+                task.Error = "未设置游戏路径，请先在首页设置游戏目录";
+            }
             return;
         }
 
+        var anyCompleted = false;
         try
         {
-            task.Status = OrganizeTaskStatus.Scanning;
-            var targetDir = Path.Combine(sceneDir, $"hs_tools_{task.FolderName}");
-            _scanner.CheckTargetDir(targetDir);
+            var targetDirs = new Dictionary<OrganizeTaskViewModel, string>();
+            foreach (var task in tasks)
+            {
+                task.Status = OrganizeTaskStatus.Scanning;
+                task.Error = null;
+                var targetDir = Path.Combine(sceneDir, $"hs_tools_{task.FolderName}");
+                _scanner.CheckTargetDir(targetDir);
+                targetDirs[task] = targetDir;
+            }
 
-            // 排除已整理目录（子串匹配，与原版 excludeDir: ['hs_tools_'] 一致）
             var scenes = _scanner.ScanDirectory(sceneDir, new ScanOptions
             {
                 ExcludeDir = { "hs_tools_" },
                 TargetExtension = { ".png" },
             });
-            task.TotalScenes = scenes.Count;
-            task.Status = OrganizeTaskStatus.Analyzing;
+            foreach (var task in tasks)
+            {
+                task.TotalScenes = scenes.Count;
+                task.ProcessedScenes = 0;
+                task.Status = OrganizeTaskStatus.Analyzing;
+            }
 
-            // 分析：批量解析角色名，按子串匹配（进度 0~50）
-            var matched = new List<string>();
+            var gameId = _config.Settings.CurrentGame;
+            var cached = _analysisCache?.GetCards(gameId, "scene") ?? new(StringComparer.OrdinalIgnoreCase);
+            var validated = new System.Collections.Concurrent.ConcurrentDictionary<string, CardAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
+            var cacheEntries = new List<CardAnalysisEntry>();
+            var analyzed = new List<PngParseResult>();
             for (var i = 0; i < scenes.Count; i += AnalyzeBatchSize)
             {
                 var batch = scenes.GetRange(i, Math.Min(AnalyzeBatchSize, scenes.Count - i));
-                var results = await _scanner.ReadPngNamesBatchAsync(batch,
-                    onError: msg => App.LogException(new Exception(msg)));
-                foreach (var item in results)
+                var results = await _scanner.ReadPngDataBatchAsync(batch,
+                    onError: msg => App.LogException(new Exception(msg)), tryGetCached: path =>
+                    {
+                        if (cached.TryGetValue(path, out var entry) &&
+                            AnalysisCacheService.IsCurrent(path, entry.FileLength, entry.LastWriteTimeUtcTicks))
+                        {
+                            validated[path] = entry;
+                            return entry.ToResult();
+                        }
+                        return null;
+                    });
+                analyzed.AddRange(results);
+                if (_analysisCache is not null)
                 {
-                    if (item.Names.Count == 0)
-                        continue;
-                    var hit = task.CharNames.Any(target =>
-                        item.Names.Any(n => n.Contains(target, StringComparison.Ordinal)));
-                    if (hit)
-                        matched.Add(item.Path);
+                    foreach (var result in results)
+                        cacheEntries.Add(validated.TryGetValue(result.Path, out var hit)
+                            ? hit
+                            : CardAnalysisEntry.FromResult("scene", result));
                 }
-
-                task.ProcessedScenes = Math.Min(i + AnalyzeBatchSize, scenes.Count);
-                task.Progress = scenes.Count == 0 ? 50 : (int)Math.Round(task.ProcessedScenes * 50.0 / scenes.Count);
+                var processed = Math.Min(i + AnalyzeBatchSize, scenes.Count);
+                foreach (var task in tasks)
+                {
+                    task.ProcessedScenes = processed;
+                    task.Progress = scenes.Count == 0 ? 50 : (int)Math.Round(processed * 50.0 / scenes.Count);
+                }
             }
+            if (_analysisCache is not null)
+                await Task.Run(() => _analysisCache.ReplaceCards(gameId, "scene", cacheEntries));
 
-            // 移动（进度 50~100；单文件失败记日志后继续——与原版一致）
-            task.Status = OrganizeTaskStatus.Moving;
-            task.Progress = 50;
-            var moved = 0;
-            var moveFailed = 0;
-            foreach (var scene in matched)
+            var remaining = new HashSet<string>(scenes, StringComparer.OrdinalIgnoreCase);
+            foreach (var task in tasks)
             {
-                try
+                task.Status = OrganizeTaskStatus.Moving;
+                task.Progress = 50;
+                var matched = analyzed.Where(item => remaining.Contains(item.Path) && item.CharaNames.Count > 0 &&
+                    task.CharNames.Any(target => item.CharaNames.Any(n => n.Contains(target, StringComparison.Ordinal)))).ToList();
+                var moved = 0;
+                var moveFailed = 0;
+                for (var i = 0; i < matched.Count; i++)
                 {
-                    // 修复原版：目标须为完整文件路径（原版传目录，移动从未生效）
-                    _scanner.MoveFile(scene, Path.Combine(targetDir, Path.GetFileName(scene)));
-                    moved++;
+                    var scene = matched[i].Path;
+                    try
+                    {
+                        _scanner.MoveFile(scene, Path.Combine(targetDirs[task], Path.GetFileName(scene)));
+                        remaining.Remove(scene);
+                        moved++;
+                    }
+                    catch (Exception ex)
+                    {
+                        moveFailed++;
+                        App.LogException(ex);
+                    }
+                    task.Progress = 50 + (int)Math.Round((i + 1) * 50.0 / matched.Count);
                 }
-                catch (Exception ex)
-                {
-                    moveFailed++;
-                    App.LogException(ex);
-                }
-                task.Progress = 50 + (matched.Count == 0 ? 50 : (int)Math.Round((moved + 1) * 50.0 / matched.Count));
-            }
 
-            task.ResultCount = moved;
-            task.MoveFailCount = moveFailed;
-            task.Progress = 100;
-            task.Status = OrganizeTaskStatus.Completed;
-            OrganizeCompleted?.Invoke(this, EventArgs.Empty);
+                task.ResultCount = moved;
+                task.MoveFailCount = moveFailed;
+                task.Progress = 100;
+                task.Status = OrganizeTaskStatus.Completed;
+                anyCompleted = true;
+            }
         }
         catch (Exception ex)
         {
-            task.Status = OrganizeTaskStatus.Error;
-            task.Error = $"整理失败：{ex.Message}"; // 统一"XX失败：原因"风格
+            var failed = tasks.FirstOrDefault(t => t.IsRunning) ?? tasks[0];
+            foreach (var task in tasks.Where(t => t.Status != OrganizeTaskStatus.Completed))
+            {
+                task.Status = OrganizeTaskStatus.Pending;
+                task.Progress = 0;
+            }
+            failed.Status = OrganizeTaskStatus.Error;
+            failed.Error = $"整理失败：{ex.Message}";
             App.LogException(ex);
         }
+
+        if (anyCompleted)
+            OrganizeCompleted?.Invoke(this, EventArgs.Empty);
     }
 }

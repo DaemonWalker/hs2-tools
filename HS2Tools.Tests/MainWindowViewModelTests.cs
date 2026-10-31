@@ -65,9 +65,10 @@ public class MainWindowViewModelTests : IDisposable
 
     private static MainWindowViewModel MakeVm(
         ConfigService config, SideloadDatabaseService db,
-        DownloadManager? downloads = null, Func<ISideloaderService>? factory = null) =>
+        DownloadManager? downloads = null, Func<ISideloaderService>? factory = null,
+        AnalysisCacheService? analysisCache = null) =>
         new(config, new ScannerService(), downloads ?? new DownloadManager(),
-            new GameLauncherService(config), db, factory ?? (() => new FakeSideloader()));
+            new GameLauncherService(config), db, factory ?? (() => new FakeSideloader()), analysisCache);
 
     private static async Task WaitFor(Func<bool> condition, int timeoutMs = 5000)
     {
@@ -359,18 +360,24 @@ public class MainWindowViewModelTests : IDisposable
         Skip.If(string.IsNullOrWhiteSpace(gameDir), "未设置 HS2_REAL_GAME_DIR（真实游戏目录）");
 
         using var config = new ConfigService(_dir);
-        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        using var cache = new AnalysisCacheService(_dir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config), analysisCache: cache);
         vm.GamePath = gameDir;
         Assert.True(vm.IsGamePathValid);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await vm.ScanCommand.ExecuteAsync(null);
         sw.Stop();
+        Assert.True(vm.ScanCompleted);
+        var coldMs = sw.ElapsedMilliseconds;
 
+        sw.Restart();
+        await vm.ScanCommand.ExecuteAsync(null);
+        sw.Stop();
         Assert.True(vm.ScanCompleted);
         vm.RefreshStats();
         _output.WriteLine(
-            $"real scan: {sw.ElapsedMilliseconds} ms, mods={vm.ModCount}, usage={vm.UsageCount}, refs={vm.TotalRefs}, missing={vm.MissingModCount}");
+            $"real scan: cold={coldMs} ms, warm={sw.ElapsedMilliseconds} ms, mods={vm.ModCount}, usage={vm.UsageCount}, refs={vm.TotalRefs}, missing={vm.MissingModCount}");
         Assert.True(vm.ModCount > 0);
         Assert.True(vm.UsageCount > 0);
     }

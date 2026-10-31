@@ -65,6 +65,19 @@ public class ThumbnailCacheTests
         });
     }
 
+    [Fact]
+    public void DecodePng_UsesRequestedPixelWidth()
+    {
+        RunInSta(() =>
+        {
+            var bytes = Convert.FromBase64String(MakeRealPngBase64());
+            var image = ThumbnailCache.DecodePng(bytes, bytes.Length, decodePixelWidth: 1);
+            Assert.NotNull(image);
+            Assert.Equal(1, image.PixelWidth);
+            Assert.True(image.IsFrozen);
+        });
+    }
+
     /// <summary>合成真实 2x2 PNG 的 base64（WPF 编码器，无渲染环境也可工作）</summary>
     internal static string MakeRealPngBase64()
     {

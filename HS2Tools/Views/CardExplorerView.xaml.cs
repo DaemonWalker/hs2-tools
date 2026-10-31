@@ -19,6 +19,6 @@ public partial class CardExplorerView : UserControl
         if (App.Services is not { } s)
             return;
 
-        DataContext = new CardExplorerViewModel(s.Config, s.Scanner);
+        DataContext = new CardExplorerViewModel(s.Config, s.Scanner, s.AnalysisCache);
     }
 }

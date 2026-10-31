@@ -20,7 +20,7 @@ public partial class SceneView : UserControl
         if (App.Services is not { } s)
             return;
 
-        var vm = new SceneWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher);
+        var vm = new SceneWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher, s.AnalysisCache);
         DataContext = vm;
         vm.LoadCardPaths();
     }
@@ -28,6 +28,9 @@ public partial class SceneView : UserControl
     private void Refresh_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is SceneWindowViewModel vm)
+        {
             vm.LoadCardPaths();
+            Grid.Reload();
+        }
     }
 }
