@@ -5,7 +5,7 @@
       "name": "Run HS2Tools (WPF)",
       "type": "coreclr",
       "request": "launch",
-      "program": "${workspaceFolder}/HS2Tools/bin/Debug/net8.0-windows/HS2Tools.exe",
+      "program": "${workspaceFolder}/HS2Tools/bin/Debug/net10.0-windows/HS2Tools.exe",
       "cwd": "${workspaceFolder}/HS2Tools",
       "preLaunchTask": "dotnet build"
     }

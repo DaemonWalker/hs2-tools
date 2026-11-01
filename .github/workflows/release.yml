@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_version:
+        description: 前三段版本号（例如 1.0.0）
+        required: true
+        type: string
+  schedule:
+    - cron: '17 18 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 检查新提交并确定发布版本
+        id: changes
+        shell: pwsh
+        env:
+          INPUT_BASE_VERSION: ${{ inputs.base_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_EVENT_NAME -ne 'schedule') {
+              "should_release=true" >> $env:GITHUB_OUTPUT
+              "base_version=$env:INPUT_BASE_VERSION" >> $env:GITHUB_OUTPUT
+              return
+          }
+
+          $latestTag = git tag --list 'v*' |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+\.\d+$' } |
+              Sort-Object { [version]($_.Substring(1)) } -Descending |
+              Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) {
+              throw '读取版本标签失败。'
+          }
+          if (-not $latestTag) {
+              throw '定时发布需要已有版本标签，请先手动执行首次发布。'
+          }
+
+          $newCommitCount = git rev-list --count "$latestTag..HEAD"
+          if ($LASTEXITCODE -ne 0) {
+              throw '检查新提交失败。'
+          }
+          if ([int]$newCommitCount -eq 0) {
+              Write-Host "自 $latestTag 以来没有新提交，跳过发布。"
+              "should_release=false" >> $env:GITHUB_OUTPUT
+              return
+          }
+
+          $latestVersion = [version]($latestTag.Substring(1))
+          if ($latestVersion.Build -ge 65534) {
+              throw "修订号已达到上限，请手动发布新的次版本：$latestTag"
+          }
+          $baseVersion = '{0}.{1}.{2}' -f $latestVersion.Major, $latestVersion.Minor, ($latestVersion.Build + 1)
+          Write-Host "自 $latestTag 以来有 $newCommitCount 个新提交，本次前三段版本号为 $baseVersion。"
+          "should_release=true" >> $env:GITHUB_OUTPUT
+          "base_version=$baseVersion" >> $env:GITHUB_OUTPUT
+
+      - name: 安装 .NET 10 SDK
+        if: steps.changes.outputs.should_release == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: 计算版本号并检查标签
+        if: steps.changes.outputs.should_release == 'true'
+        id: version
+        shell: pwsh
+        env:
+          BASE_VERSION: ${{ steps.changes.outputs.base_version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:BASE_VERSION -notmatch '^\d+\.\d+\.\d+$') {
+              throw '版本号必须由三段数字组成，例如 1.0.0。'
+          }
+
+          $parts = @($env:BASE_VERSION.Split('.') + $env:BUILD_NUMBER) | ForEach-Object {
+              $value = 0
+              if (-not [int]::TryParse($_, [ref]$value) -or $value -gt 65534) {
+                  throw "版本号每段必须是 0 到 65534 之间的整数：$_"
+              }
+              $value.ToString()
+          }
+          $version = $parts -join '.'
+          $existingTag = git ls-remote --tags origin "refs/tags/v$version"
+          if ($LASTEXITCODE -ne 0) {
+              throw '检查远程标签失败。'
+          }
+          if ($existingTag) {
+              throw "标签已存在：v$version"
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: 运行测试
+        if: steps.changes.outputs.should_release == 'true'
+        run: dotnet test HS2Tools.sln --configuration Release --nologo
+
+      - name: 发布应用
+        if: steps.changes.outputs.should_release == 'true'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dotnet publish HS2Tools/HS2Tools.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            "-p:PublishSingleFile=true" `
+            "-p:Version=$env:RELEASE_VERSION" `
+            --output artifacts/package `
+            --nologo
+          if ($LASTEXITCODE -ne 0) {
+              throw '应用发布失败。'
+          }
+
+      - name: 打包发布产物
+        if: steps.changes.outputs.should_release == 'true'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem artifacts/package -Filter *.pdb -Recurse | Remove-Item -Force
+          $assetName = "HS2Tools-v$env:RELEASE_VERSION-win-x64.zip"
+          $zipPath = "artifacts/$assetName"
+          Compress-Archive -Path artifacts/package/* -DestinationPath $zipPath
+          $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $assetName" | Set-Content "$zipPath.sha256" -Encoding ascii
+
+      - name: 创建 GitHub Release
+        if: steps.changes.outputs.should_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "v$env:RELEASE_VERSION"
+          $zipPath = "artifacts/HS2Tools-$tag-win-x64.zip"
+          gh release create $tag $zipPath "$zipPath.sha256" `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title "HS2 Tools $tag" `
+            --generate-notes
+          if ($LASTEXITCODE -ne 0) {
+              throw 'GitHub Release 创建失败。'
+          }

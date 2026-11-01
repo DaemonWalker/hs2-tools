@@ -116,8 +116,8 @@ public class ThumbnailCacheTests
                             Source = new Uri("/HS2Tools;component/Themes/Theme.xaml", UriKind.Relative),
                         });
                     }
+                    action();
                 }
-                action();
             }
             catch (Exception ex) { error = ex; }
         });

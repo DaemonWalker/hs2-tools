@@ -1,6 +1,6 @@
 # hs2-tools
 
-一个基于 **.NET 8 + WPF** 的 Windows 桌面应用，用于管理 HoneySelect2 游戏的模组和角色卡。
+一个基于 **.NET 10 + WPF** 的 Windows 桌面应用，用于管理 HoneySelect2 游戏的模组和角色卡。
 
 ## 功能特性
 
@@ -13,7 +13,7 @@
 
 ## 技术栈
 
-- **框架**: .NET 8 LTS + WPF（`net8.0-windows`），MVVM（CommunityToolkit.Mvvm）
+- **框架**: .NET 10 LTS + WPF（`net10.0-windows`），MVVM（CommunityToolkit.Mvvm）
 - **HTML 解析**: HtmlAgilityPack
 - **卡片/场景解析**: MessagePack-CSharp（`【AIS_Chara】` BlockHeader + KKEx 结构化解析，基准 IllusionModdingAPI/BepisPlugins）
 - **增量分析缓存**: Microsoft.Data.Sqlite（按文件大小与修改时间复用未变化的 Mod/卡片分析结果）
@@ -49,4 +49,4 @@ dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
 ## 运行环境
 
 - Windows 10/11（x64）
-- 运行发布产物无需安装 .NET（自包含单文件）；开发需 .NET 8 SDK
+- 运行发布产物无需安装 .NET（自包含单文件）；开发需 .NET 10 SDK

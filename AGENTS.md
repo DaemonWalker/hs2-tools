@@ -3,13 +3,13 @@
 > 本文件是给 AI 编码助手（Kimi Code、Claude Code 等）的项目指引，是唯一事实来源。
 > `CLAUDE.md` 仅为指向本文件的兼容指针。
 
-HS2-Tools 是一个基于 **.NET 8 + WPF** 的桌面应用，用于管理 Honey Select 2、恋活（KK）、恋活 Sunshine（KKS）游戏的模组和角色卡。
+HS2-Tools 是一个基于 **.NET 10 + WPF** 的桌面应用，用于管理 Honey Select 2、恋活（KK）、恋活 Sunshine（KKS）游戏的模组和角色卡。
 
 ## 核心信息
 
 | 项目 | 说明 |
 |------|------|
-| **技术栈** | .NET 8 LTS + WPF（`net8.0-windows`） |
+| **技术栈** | .NET 10 LTS + WPF（`net10.0-windows`） |
 | **UI 模式** | MVVM（CommunityToolkit.Mvvm，源生成器） |
 | **多游戏** | `Models/GameProfile.cs` 静态注册表（hs2/kk/kks）；配置按游戏隔离（settings.json 的 `currentGame` + `games`） |
 | **HTML 解析** | HtmlAgilityPack |
@@ -42,6 +42,8 @@ dotnet test
 dotnet publish HS2Tools/HS2Tools.csproj -c Release -r win-x64 \
   --self-contained -p:PublishSingleFile=true -o publish   # 单文件自包含 exe
 ```
+
+GitHub Release 通过 `.github/workflows/release.yml` 发布：手动触发时输入前三段版本号，每天北京时间 02:17 自动检查最新版本标签之后的新提交，有提交才递增修订号并发布；均以 `github.run_number` 作为第四段 Build 号。首次发布须手动执行；测试成功后发布 .NET 10 `win-x64` 完整产物、SHA-256、同名标签和 Release，不在页面展示版本号。
 
 真实环境基准（默认跳过，设环境变量后运行）：
 `HS2_REAL_CARD_DIRS`（卡片目录，分号分隔）/ `HS2_REAL_MODS_DIR` / `HS2_REAL_GAME_DIR` / `HS2TOOLS_REAL_CRAWL=1`（真实站点爬虫对照）。
