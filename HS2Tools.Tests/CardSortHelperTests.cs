@@ -60,6 +60,14 @@ public class CardSortHelperTests
     }
 
     [Fact]
+    public void Sort_NameAsc_UsesNumericOrdering()
+    {
+        var paths = new[] { @"D:\cards\card10.png", @"D:\cards\card2.png", @"D:\cards\card1.png" };
+        var result = CardSortHelper.FilterAndSort(paths, "", CardSortType.NameAsc, null);
+        Assert.Equal([@"D:\cards\card1.png", @"D:\cards\card2.png", @"D:\cards\card10.png"], result);
+    }
+
+    [Fact]
     public void Sort_FavoriteFirst_BothGroupsNameSorted()
     {
         var favorites = new[] { @"d:/cards/子.png" }; // 规范化匹配：大小写/分隔符不敏感

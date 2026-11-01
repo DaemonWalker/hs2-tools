@@ -99,7 +99,8 @@ public class ModDedupTests : IDisposable
         TestAssets.WriteZipmod(_dir, "old.zipmod", TestAssets.MakeManifest("g-dup", "Old", "1.0"));
         var newer = TestAssets.WriteZipmod(_dir, "new.zipmod", TestAssets.MakeManifest("g-dup", "New", "2.0"));
 
-        var result = await scanner.ReadZipModBatchAsync(Directory.GetFiles(_dir, "*.zipmod"));
+        var result = await scanner.ReadZipModBatchAsync(
+            Directory.GetFiles(_dir, "*.zipmod"), ct: TestContext.Current.CancellationToken);
 
         var info = Assert.Single(result);
         Assert.Equal(newer, info.Value.Path); // 同 guid 按规则裁决，不再是随机覆盖
@@ -114,7 +115,8 @@ public class ModDedupTests : IDisposable
         TestAssets.WriteZipmod(_dir, "b.zipmod", TestAssets.MakeManifest("g-dup", "B", "2.0"));
         TestAssets.WriteZipmod(_dir, "c.zipmod", TestAssets.MakeManifest("g-uniq", "C"));
 
-        var entries = await scanner.ReadZipModBatchListAsync(Directory.GetFiles(_dir, "*.zipmod"));
+        var entries = await scanner.ReadZipModBatchListAsync(
+            Directory.GetFiles(_dir, "*.zipmod"), ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(3, entries.Count); // 不折叠重复 guid
         Assert.Equal(2, entries.Count(kv => kv.Key == "g-dup"));

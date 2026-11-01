@@ -1,6 +1,5 @@
 using System.Text;
 using HS2Tools.Services;
-using Xunit.Abstractions;
 
 namespace HS2Tools.Tests;
 
@@ -17,15 +16,15 @@ public class ScannerTests : IDisposable
     // ==================== 阶段 4：真实环境基准 ====================
 
     /// <summary>真实 mods 目录（数千 zipmod）全量扫描耗时；设 HS2_REAL_MODS_DIR 时执行</summary>
-    [SkippableFact]
+    [Fact]
     public async Task RealModsDir_ScanBenchmark()
     {
         var dir = Environment.GetEnvironmentVariable("HS2_REAL_MODS_DIR");
-        Skip.If(string.IsNullOrWhiteSpace(dir), "未设置 HS2_REAL_MODS_DIR（真实 mods 目录）");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(dir), "未设置 HS2_REAL_MODS_DIR（真实 mods 目录）");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var files = _svc.ScanDirectory(dir, new() { TargetExtension = { ".zipmod" } });
-        var results = await _svc.ReadZipModBatchAsync(files);
+        var results = await _svc.ReadZipModBatchAsync(files, ct: TestContext.Current.CancellationToken);
         sw.Stop();
 
         _output.WriteLine($"{files.Count} zipmods → {results.Count} guids, {sw.ElapsedMilliseconds} ms");
@@ -453,7 +452,8 @@ public class ScannerTests : IDisposable
         var errors = new List<string>();
         using (var fs = new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            var results = await _svc.ReadPngModsBatchAsync(new[] { good, locked }, onError: errors.Add);
+            var results = await _svc.ReadPngModsBatchAsync(
+                new[] { good, locked }, onError: errors.Add, ct: TestContext.Current.CancellationToken);
             Assert.Single(results);
             Assert.Equal(good, results[0].Path);
             Assert.Equal(new[] { "com.mod.good" }, results[0].ModIDs);
@@ -469,7 +469,8 @@ public class ScannerTests : IDisposable
         var p2 = TestAssets.WritePng(_dir, "b.png", TestAssets.PngPrefix(),
             TestAssets.BuildCharaDataRegion(new[] { "乙" }, Array.Empty<string>()));
 
-        var results = await _svc.ReadPngPageDataBatchAsync(new[] { p1, p2 });
+        var results = await _svc.ReadPngPageDataBatchAsync(
+            new[] { p1, p2 }, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, results.Count);
         Assert.All(results, r =>

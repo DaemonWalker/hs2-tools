@@ -213,7 +213,7 @@ public class ScannerService
             if (structuralOk)
                 return wantNames ? names : NormalizeGuids(modIds);
             ErrorLog.Log($"structural parse failed, fallback to byte scan in data region ({data.Length - offset} bytes)");
-            return wantNames ? SearchNames(data[offset..]) : NormalizeGuids(SearchBuffer(ModStart, ModEnd, data[offset..]));
+            return wantNames ? SearchNames(data.AsSpan(offset)) : NormalizeGuids(SearchBuffer(ModStart, ModEnd, data.AsSpan(offset)));
         }
         // 无 IEND（非卡片文件）：保持旧行为，全文件回退扫描
         return wantNames ? SearchNames(data) : NormalizeGuids(SearchBuffer(ModStart, ModEnd, data));
@@ -270,7 +270,7 @@ public class ScannerService
     /// 回退名字扫描（多游戏）：先 HS2/AIS 模式（fullname..personality）；
     /// 无结果再试 KK/KKS（lastname..firstname 与 firstname..nickname 两段合并去重）。
     /// </summary>
-    private static List<string> SearchNames(byte[] data)
+    private static List<string> SearchNames(ReadOnlySpan<byte> data)
     {
         var names = SearchBuffer(NameStart, NameEnd, data);
         if (names.Count > 0)
@@ -284,19 +284,19 @@ public class ScannerService
     /// 回退路径：从 Buffer 中循环提取所有 [start...end] 区间的字符串（Go searchBuffer）。
     /// 命中区间去首尾各 1 字节再 Trim；结果去重且无序。
     /// </summary>
-    internal static List<string> SearchBuffer(byte[] start, byte[] end, byte[] data)
+    internal static List<string> SearchBuffer(ReadOnlySpan<byte> start, ReadOnlySpan<byte> end, ReadOnlySpan<byte> data)
     {
         var result = new HashSet<string>();
         var pos = 0;
 
         while (true)
         {
-            var startIndex = data.AsSpan(pos).IndexOf(start);
+            var startIndex = data[pos..].IndexOf(start);
             if (startIndex < 0)
                 break;
             startIndex += pos;
 
-            var endIndex = data.AsSpan(startIndex + start.Length).IndexOf(end);
+            var endIndex = data[(startIndex + start.Length)..].IndexOf(end);
             if (endIndex < 0)
                 break;
             endIndex += startIndex + start.Length;
@@ -325,7 +325,7 @@ public class ScannerService
     /// 注意：Go string(bytes) 对无效 UTF-8 保留原始字节，.NET 默认替换为 U+FFFD——
     /// 乱码卡名输出可能与原版不同（迁移文档已记录，测试期确认可接受）。
     /// </summary>
-    private static string BufferToString(byte[] buffer) => Encoding.UTF8.GetString(buffer).Trim();
+    private static string BufferToString(ReadOnlySpan<byte> buffer) => Encoding.UTF8.GetString(buffer).Trim();
 
     /// <summary>读取单个 PNG 文件的缩略图（Base64）。读盘失败返回空串（与原版一致）</summary>
     public string ReadPngImage(string filePath)
@@ -380,7 +380,7 @@ public class ScannerService
         if (!structuralOk)
         {
             ErrorLog.Log($"ParsePngData structural parse failed, fallback to byte scan: {filePath}");
-            var region = data[offset..];
+            var region = data.AsSpan(offset);
             names = SearchNames(region);
             modIds = SearchBuffer(ModStart, ModEnd, region);
         }
@@ -656,12 +656,20 @@ public class ScannerService
     }
 
     /// <summary>解析 zipmod 文件，提取 manifest.xml 中的信息（guid/name 清洗、version 不清洗）</summary>
-    public Dictionary<string, ModInfo> ReadZipMod(string filePath)
+    public Dictionary<string, ModInfo> ReadZipMod(string filePath) =>
+        ReadZipModAsync(filePath).ConfigureAwait(false).GetAwaiter().GetResult();
+
+    /// <summary>异步解析 zipmod；文件与 manifest 读取使用 .NET 10 ZIP 异步 API</summary>
+    public async Task<Dictionary<string, ModInfo>> ReadZipModAsync(string filePath, CancellationToken ct = default)
     {
         ZipArchive archive;
         try
         {
-            archive = ZipFile.OpenRead(filePath);
+            archive = await ZipFile.OpenReadAsync(filePath, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -676,54 +684,60 @@ public class ScannerService
                 ?? throw new InvalidDataException("manifest.xml not found in zipmod");
 
             string content;
-            using (var reader = new StreamReader(manifestEntry.Open()))
-                content = reader.ReadToEnd();
+            await using (var stream = await manifestEntry.OpenAsync(ct).ConfigureAwait(false))
+            using (var reader = new StreamReader(stream))
+                content = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
 
-            XDocument doc;
-            try
-            {
-                doc = XDocument.Parse(content);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidDataException($"failed to parse manifest.xml: {ex.Message}", ex);
-            }
-
-            // Go encoding/xml：根元素必须是 manifest
-            if (doc.Root is null || doc.Root.Name.LocalName != "manifest")
-                throw new InvalidDataException("failed to parse manifest.xml: root element is not <manifest>");
-
-            // Go encoding/xml 字段匹配：精确优先，大小写不敏感回退
-            var guid = GetElementValue(doc.Root, "guid") ?? "";
-            var cleanGuid = NormalizeGuid(guid);
-            if (cleanGuid == "")
-                throw new InvalidDataException("manifest.xml missing guid field");
-
-            var cleanName = CleanString(GetElementValue(doc.Root, "name") ?? "");
-            long fileLength = 0, lastWriteTicks = 0;
-            try
-            {
-                fileLength = new FileInfo(filePath).Length;
-                lastWriteTicks = File.GetLastWriteTimeUtc(filePath).Ticks;
-            }
-            catch (Exception ex)
-            {
-                ErrorLog.Log($"ReadZipMod metadata failed: {filePath}: {ex.Message}");
-            }
-
-            return new Dictionary<string, ModInfo>
-            {
-                [cleanGuid] = new ModInfo
-                {
-                    Name = cleanName,
-                    Version = GetElementValue(doc.Root, "version") ?? "", // Version 不清洗
-                    Path = filePath,
-                    FileLength = fileLength,
-                    LastWriteTimeUtcTicks = lastWriteTicks,
-                    ShaderNames = GetShaderNames(doc.Root),
-                },
-            };
+            return ParseZipModManifest(filePath, content);
         }
+    }
+
+    private static Dictionary<string, ModInfo> ParseZipModManifest(string filePath, string content)
+    {
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Parse(content);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException($"failed to parse manifest.xml: {ex.Message}", ex);
+        }
+
+        // Go encoding/xml：根元素必须是 manifest
+        if (doc.Root is null || doc.Root.Name.LocalName != "manifest")
+            throw new InvalidDataException("failed to parse manifest.xml: root element is not <manifest>");
+
+        // Go encoding/xml 字段匹配：精确优先，大小写不敏感回退
+        var guid = GetElementValue(doc.Root, "guid") ?? "";
+        var cleanGuid = NormalizeGuid(guid);
+        if (cleanGuid == "")
+            throw new InvalidDataException("manifest.xml missing guid field");
+
+        var cleanName = CleanString(GetElementValue(doc.Root, "name") ?? "");
+        long fileLength = 0, lastWriteTicks = 0;
+        try
+        {
+            fileLength = new FileInfo(filePath).Length;
+            lastWriteTicks = File.GetLastWriteTimeUtc(filePath).Ticks;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"ReadZipMod metadata failed: {filePath}: {ex.Message}");
+        }
+
+        return new Dictionary<string, ModInfo>
+        {
+            [cleanGuid] = new ModInfo
+            {
+                Name = cleanName,
+                Version = GetElementValue(doc.Root, "version") ?? "", // Version 不清洗
+                Path = filePath,
+                FileLength = fileLength,
+                LastWriteTimeUtcTicks = lastWriteTicks,
+                ShaderNames = GetShaderNames(doc.Root),
+            },
+        };
     }
 
     /// <summary>manifest <![CDATA[<MaterialEditor><Shader Name="..."/>]]> 声明的 shader 名表（元素/属性名大小写不敏感，无则空表）</summary>
@@ -756,7 +770,7 @@ public class ScannerService
         IReadOnlyList<string> filePaths, int concurrency = 4, Action<string>? onError = null, CancellationToken ct = default)
     {
         var entries = await ReadZipModBatchListAsync(filePaths, concurrency, onError, ct);
-        var results = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
+        var results = new Dictionary<string, ModInfo>(entries.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var (guid, info) in entries)
         {
             if (!results.TryGetValue(guid, out var existing) || CompareModsForKeep(info, existing) < 0)
@@ -773,7 +787,7 @@ public class ScannerService
         if (concurrency <= 0)
             concurrency = 4;
         var results = new ConcurrentBag<KeyValuePair<string, ModInfo>>();
-        await Parallel.ForEachAsync(filePaths, new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = ct }, (path, _) =>
+        await Parallel.ForEachAsync(filePaths, new ParallelOptions { MaxDegreeOfParallelism = concurrency, CancellationToken = ct }, async (path, bodyCt) =>
         {
             try
             {
@@ -783,16 +797,19 @@ public class ScannerService
                 }
                 else
                 {
-                    foreach (var kv in ReadZipMod(path))
+                    foreach (var kv in await ReadZipModAsync(path, bodyCt).ConfigureAwait(false))
                         results.Add(kv);
                 }
+            }
+            catch (OperationCanceledException) when (bodyCt.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 onError?.Invoke($"ReadZipMod failed: {path}: {ex.Message}");
             }
-            return ValueTask.CompletedTask;
-        });
+        }).ConfigureAwait(false);
         return new List<KeyValuePair<string, ModInfo>>(results);
     }
 

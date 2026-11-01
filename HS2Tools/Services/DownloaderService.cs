@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -127,7 +128,13 @@ public class DownloaderService
             }
 
             // 打开文件（可定位流手动模拟 Go 的 O_APPEND / O_TRUNC，避免 Append 模式不可 Seek 的问题）
-            await using var file = new FileStream(outputPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+            await using var file = new FileStream(outputPath, new FileStreamOptions
+            {
+                Mode = FileMode.OpenOrCreate,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
+            });
             if (startPos > 0)
                 file.Position = file.Length;
             else
@@ -150,23 +157,30 @@ public class DownloaderService
             {
                 await using var src = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
 
-                var buf = new byte[BufferSize];
-                while (true)
+                var buf = ArrayPool<byte>.Shared.Rent(BufferSize);
+                try
                 {
-                    stallCts.CancelAfter(StallTimeout); // 每次读前重置停滞计时（有数据即顺延）
-                    int n;
-                    try
+                    while (true)
                     {
-                        n = await src.ReadAsync(buf, stallCts.Token).ConfigureAwait(false);
+                        stallCts.CancelAfter(StallTimeout); // 每次读前重置停滞计时（有数据即顺延）
+                        int n;
+                        try
+                        {
+                            n = await src.ReadAsync(buf.AsMemory(0, BufferSize), stallCts.Token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                        {
+                            throw new TimeoutException("下载停滞：60 秒未收到数据");
+                        }
+                        if (n == 0)
+                            break;
+                        await file.WriteAsync(buf.AsMemory(0, n), ct).ConfigureAwait(false);
+                        tracker.Update(n);
                     }
-                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                    {
-                        throw new TimeoutException("下载停滞：60 秒未收到数据");
-                    }
-                    if (n == 0)
-                        break;
-                    await file.WriteAsync(buf.AsMemory(0, n), ct).ConfigureAwait(false);
-                    tracker.Update(n);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buf);
                 }
             }
             catch (OperationCanceledException)

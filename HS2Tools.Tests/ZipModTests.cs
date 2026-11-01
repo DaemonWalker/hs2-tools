@@ -151,7 +151,8 @@ public class ZipModTests : IDisposable
         File.WriteAllText(corrupt, "junk");
 
         var errors = new List<string>();
-        var result = await _svc.ReadZipModBatchAsync(new[] { good1, good2, corrupt }, onError: errors.Add);
+        var result = await _svc.ReadZipModBatchAsync(
+            new[] { good1, good2, corrupt }, onError: errors.Add, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, result.Count);
         Assert.Contains("com.test.a", result.Keys);

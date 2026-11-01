@@ -110,7 +110,7 @@ jobs:
 
       - name: 运行测试
         if: steps.changes.outputs.should_release == 'true'
-        run: dotnet test HS2Tools.sln --configuration Release --nologo
+        run: dotnet test --solution HS2Tools.sln --configuration Release --nologo
 
       - name: 发布应用
         if: steps.changes.outputs.should_release == 'true'

@@ -370,7 +370,7 @@ public partial class CardGridControl : UserControl
                 ItemsSource ?? (IReadOnlyList<string>)Array.Empty<string>(),
                 SearchText, SortType, _config?.Settings.Current.Favorites);
 
-            var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var order = new Dictionary<string, int>(_sorted.Count, StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < _sorted.Count; i++)
                 order[_sorted[i]] = i;
 

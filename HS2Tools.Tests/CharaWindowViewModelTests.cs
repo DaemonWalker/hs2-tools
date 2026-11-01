@@ -212,7 +212,7 @@ public class CharaWindowViewModelTests : IDisposable
         {
             if (DateTime.UtcNow > deadline)
                 throw new TimeoutException("downloads did not complete");
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
         }
 
         var outDir = Path.Combine(gameDir, GameProfiles.Hs2.ModDownloadDirRelative);
@@ -257,7 +257,7 @@ public class CharaWindowViewModelTests : IDisposable
         {
             if (DateTime.UtcNow > deadline)
                 throw new TimeoutException("download did not complete");
-            await Task.Delay(50);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
         }
         Assert.True(item.ShowCompleted);
     }

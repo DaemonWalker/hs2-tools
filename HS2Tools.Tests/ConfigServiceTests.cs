@@ -88,7 +88,7 @@ public class ConfigServiceTests : IDisposable
             var logPath = Path.Combine(logDir, "error.log");
             var deadline = DateTime.Now.AddSeconds(3);
             while (!File.Exists(logPath) && DateTime.Now < deadline)
-                await Task.Delay(50);
+                await Task.Delay(50, TestContext.Current.CancellationToken);
 
             Assert.True(File.Exists(logPath)); // Flush 失败已记日志且进程存活
         }

@@ -342,16 +342,16 @@ public partial class MainWindowViewModel : ObservableObject
         var total = files.Count + unusedFiles.Count;
         ModScanProgress = $"0/{total}";
 
-        var result = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
-        var unusedResult = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
-        var entries = new List<ModScanEntry>();
+        var result = new Dictionary<string, ModInfo>(files.Count, StringComparer.OrdinalIgnoreCase);
+        var unusedResult = new Dictionary<string, ModInfo>(unusedFiles.Count, StringComparer.OrdinalIgnoreCase);
+        var entries = new List<ModScanEntry>(total);
         var gameId = _config.Settings.CurrentGame;
         var cachedMods = _analysisCache?.GetZipMods(gameId, "mods") ?? new(StringComparer.OrdinalIgnoreCase);
         var cachedUnused = _analysisCache?.GetZipMods(gameId, "unused") ?? new(StringComparer.OrdinalIgnoreCase);
         var validatedMods = new System.Collections.Concurrent.ConcurrentDictionary<string, ZipModAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
         var validatedUnused = new System.Collections.Concurrent.ConcurrentDictionary<string, ZipModAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
-        var newCacheMods = new List<ZipModAnalysisEntry>();
-        var newCacheUnused = new List<ZipModAnalysisEntry>();
+        var newCacheMods = new List<ZipModAnalysisEntry>(files.Count);
+        var newCacheUnused = new List<ZipModAnalysisEntry>(unusedFiles.Count);
         var scanned = 0;
         foreach (var (batch, isUnused) in Batches(files, false).Concat(Batches(unusedFiles, true)))
         {
@@ -466,7 +466,7 @@ public partial class MainWindowViewModel : ObservableObject
         var gameId = _config.Settings.CurrentGame;
         var cached = _analysisCache?.GetCards(gameId, scope) ?? new(StringComparer.OrdinalIgnoreCase);
         var validated = new System.Collections.Concurrent.ConcurrentDictionary<string, CardAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
-        var cacheEntries = new List<CardAnalysisEntry>();
+        var cacheEntries = new List<CardAnalysisEntry>(files.Count);
         var usage = new Dictionary<string, int>();
         for (var i = 0; i < files.Count; i += BatchSize)
         {

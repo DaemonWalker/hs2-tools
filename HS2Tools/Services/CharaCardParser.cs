@@ -67,13 +67,9 @@ internal static class CharaCardParser
 
     private sealed class OrderedStrings
     {
-        private readonly HashSet<string> _seen = new();
-        public List<string> Values { get; } = new();
-        public void Add(string value)
-        {
-            if (_seen.Add(value))
-                Values.Add(value);
-        }
+        private readonly OrderedDictionary<string, byte> _values = new();
+        public List<string> Values => _values.Select(kv => kv.Key).ToList();
+        public void Add(string value) => _values.TryAdd(value, 0, out _);
     }
 
     /// <summary>
@@ -228,6 +224,7 @@ internal static class CharaCardParser
             }
 
             var arrCount = reader.ReadArrayHeader();
+            infos.Capacity = Math.Max(infos.Capacity, infos.Count + arrCount);
             for (var j = 0; j < arrCount; j++)
             {
                 if (reader.NextMessagePackType == MessagePackType.Array)

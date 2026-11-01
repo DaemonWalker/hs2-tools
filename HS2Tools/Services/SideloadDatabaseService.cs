@@ -217,7 +217,7 @@ public class SideloadDatabaseService
         lock (_sync)
         {
             var entries = GetEntries(CurrentSourceId);
-            var result = new Dictionary<string, KnownSideloadMod>(StringComparer.Ordinal);
+            var result = new Dictionary<string, KnownSideloadMod>(entries.Count, StringComparer.Ordinal);
             foreach (var (guid, entry) in entries)
             {
                 if (!string.IsNullOrEmpty(entry.Url))

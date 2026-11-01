@@ -33,7 +33,7 @@ public class DownloaderTests : IDisposable
 
         await new DownloaderService().DownloadAsync(
             _server.BaseUrl + "file.zipmod", output, resume: true,
-            new SyncProgress<DownloadProgress>(messages.Add));
+            new SyncProgress<DownloadProgress>(messages.Add), TestContext.Current.CancellationToken);
 
         Assert.Equal(payload, File.ReadAllBytes(output));
         var complete = Assert.Single(messages, m => m.Type == DownloadMessageType.Complete);
@@ -54,7 +54,7 @@ public class DownloaderTests : IDisposable
 
         await new DownloaderService().DownloadAsync(
             _server.BaseUrl + "file.zipmod", output, resume: true,
-            new SyncProgress<DownloadProgress>(_ => { }));
+            new SyncProgress<DownloadProgress>(_ => { }), TestContext.Current.CancellationToken);
 
         Assert.Equal(payload, File.ReadAllBytes(output));
         Assert.Contains(_server.Requests, r => r.Range == "bytes=100-");
@@ -73,7 +73,7 @@ public class DownloaderTests : IDisposable
         var messages = new List<DownloadProgress>();
         await new DownloaderService().DownloadAsync(
             _server.BaseUrl + "file.zipmod", output, resume: true,
-            new SyncProgress<DownloadProgress>(messages.Add));
+            new SyncProgress<DownloadProgress>(messages.Add), TestContext.Current.CancellationToken);
 
         // 服务器返回 200 时 startPos 被重置并整文件重写（原版 "restarting" 提示为不可达死代码，不断言）
         Assert.Equal(payload, File.ReadAllBytes(output));
@@ -91,7 +91,8 @@ public class DownloaderTests : IDisposable
         File.WriteAllBytes(output, payload.Concat(new byte[extraBytes]).ToArray());
 
         await new DownloaderService().DownloadAsync(
-            _server.BaseUrl + "file.zipmod", output, resume: true);
+            _server.BaseUrl + "file.zipmod", output, resume: true,
+            ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(payload, File.ReadAllBytes(output));
         Assert.Contains(_server.Requests, r => r.Range == $"bytes={payload.Length + extraBytes}-");
@@ -108,7 +109,8 @@ public class DownloaderTests : IDisposable
         File.WriteAllBytes(output, new byte[500]);
 
         await new DownloaderService().DownloadAsync(
-            _server.BaseUrl + "file.zipmod", output, resume: false);
+            _server.BaseUrl + "file.zipmod", output, resume: false,
+            ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(payload, File.ReadAllBytes(output));
         Assert.DoesNotContain(_server.Requests, r => r.Range != null);
@@ -119,7 +121,8 @@ public class DownloaderTests : IDisposable
     {
         _server.MapStatus("/missing.zipmod", 404);
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            new DownloaderService().DownloadAsync(_server.BaseUrl + "missing.zipmod", Path.Combine(_dir, "x.zipmod"), true));
+            new DownloaderService().DownloadAsync(_server.BaseUrl + "missing.zipmod",
+                Path.Combine(_dir, "x.zipmod"), true, ct: TestContext.Current.CancellationToken));
         Assert.Contains("server returned status 404", ex.Message);
     }
 
@@ -128,7 +131,8 @@ public class DownloaderTests : IDisposable
     {
         _server.MapFile("/file.zipmod", Payload(1024));
         await new DownloaderService().DownloadAsync(
-            _server.BaseUrl + "file.zipmod", Path.Combine(_dir, "x.zipmod"), false);
+            _server.BaseUrl + "file.zipmod", Path.Combine(_dir, "x.zipmod"), false,
+            ct: TestContext.Current.CancellationToken);
         Assert.Contains(_server.Requests, r => r.UserAgent == "hs2-tools-downloader/1.0");
     }
 

@@ -99,7 +99,7 @@ public class DownloadManagerTests : IDisposable
         };
 
         downloads.StartDownload("ok", "ok.zipmod", _dir);
-        await finished.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
         Assert.NotNull(task);
         Assert.True(File.Exists(task!.OutputPath)); // 校验通过，文件保留
@@ -124,7 +124,7 @@ public class DownloadManagerTests : IDisposable
         };
 
         downloads.StartDownload("bad", "bad.zipmod", _dir);
-        await finished.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
         Assert.NotNull(task);
         Assert.Contains("校验失败", task!.ErrorMessage);

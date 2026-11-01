@@ -212,7 +212,8 @@ public class SideloaderTests : IDisposable
 
         var svc = new SideloaderService(baseUrl: _server.BaseUrl);
         var run = svc.RunAsync();
-        var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(5)));
+        var finished = await Task.WhenAny(run,
+            Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         if (finished != run)
         {
             svc.Cancel();
@@ -428,7 +429,7 @@ public class SideloaderTests : IDisposable
         var svc = new SideloaderService(baseUrl: _server.BaseUrl);
 
         var first = svc.RunAsync();
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         await Assert.ThrowsAsync<InvalidOperationException>(() => svc.RunAsync());
         svc.Cancel();
         await first;
@@ -455,10 +456,10 @@ public class SideloaderTests : IDisposable
 
     // ==================== 真实站点验证（阶段 1 验收：需 HS2TOOLS_REAL_CRAWL=1） ====================
 
-    [SkippableFact]
+    [Fact]
     public async Task Crawl_RealSite_CompareWithGoBaseline()
     {
-        Skip.If(Environment.GetEnvironmentVariable("HS2TOOLS_REAL_CRAWL") != "1",
+        Assert.SkipWhen(Environment.GetEnvironmentVariable("HS2TOOLS_REAL_CRAWL") != "1",
             "真实站点爬取为门控验证：设置 HS2TOOLS_REAL_CRAWL=1 后运行（可选 HS2TOOLS_PROXY 指定代理）");
 
         // 追踪日志：定位崩溃/内存问题（%TEMP%/hs2tools-crawl-trace.log）

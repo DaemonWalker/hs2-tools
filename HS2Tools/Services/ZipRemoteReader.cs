@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
@@ -235,7 +236,7 @@ internal static class ZipRemoteReader
         if (data is null)
             return null;
 
-        byte[] xmlData;
+        ReadOnlySpan<byte> xmlData;
         switch (compressionMethod)
         {
             case CompressionStore:
@@ -248,15 +249,22 @@ internal static class ZipRemoteReader
                     using var input = new MemoryStream(data);
                     using var deflate = new DeflateStream(input, CompressionMode.Decompress);
                     using var output = new MemoryStream();
-                    var buffer = new byte[81920];
-                    int read;
-                    while ((read = deflate.Read(buffer, 0, buffer.Length)) > 0)
+                    var buffer = ArrayPool<byte>.Shared.Rent(81920);
+                    try
                     {
-                        output.Write(buffer, 0, read);
-                        if (output.Length > MaxManifestDecompressedSize)
-                            return null;
+                        int read;
+                        while ((read = deflate.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            output.Write(buffer, 0, read);
+                            if (output.Length > MaxManifestDecompressedSize)
+                                return null;
+                        }
                     }
-                    xmlData = output.ToArray();
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+                    xmlData = output.GetBuffer().AsSpan(0, (int)output.Length);
                 }
                 catch
                 {

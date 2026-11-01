@@ -2,7 +2,6 @@ using System.Text;
 using HS2Tools.Models;
 using HS2Tools.Services;
 using HS2Tools.ViewModels;
-using Xunit.Abstractions;
 
 namespace HS2Tools.Tests;
 
@@ -362,11 +361,11 @@ public class MainWindowViewModelTests : IDisposable
     }
 
     /// <summary>阶段 4：真实游戏目录三阶段扫描（设 HS2_REAL_GAME_DIR 时执行，只读不写游戏目录）</summary>
-    [SkippableFact]
+    [Fact]
     public async Task Scan_RealGameDir_Benchmark()
     {
         var gameDir = Environment.GetEnvironmentVariable("HS2_REAL_GAME_DIR");
-        Skip.If(string.IsNullOrWhiteSpace(gameDir), "未设置 HS2_REAL_GAME_DIR（真实游戏目录）");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(gameDir), "未设置 HS2_REAL_GAME_DIR（真实游戏目录）");
 
         using var config = new ConfigService(_dir);
         using var cache = new AnalysisCacheService(_dir);

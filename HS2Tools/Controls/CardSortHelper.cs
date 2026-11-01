@@ -17,13 +17,13 @@ public enum CardSortType
 
 /// <summary>
 /// 卡片网格的过滤/排序/收藏辅助（纯函数，对应原版 CardGrid.tsx 的 sortedPaths 与 toggleFavorite）。
-/// 排序键为文件名（不含扩展名），中文比较用 zh-CN 区域对齐原版 localeCompare 行为。
+/// 排序键为文件名（不含扩展名），使用 zh-CN 文化规则与 .NET 10 数值自然排序。
 /// </summary>
 public static class CardSortHelper
 {
-    /// <summary>zh-CN 比较器（对齐原版 localeCompare(name, 'zh-CN')）</summary>
+    /// <summary>zh-CN 比较器；.NET 10 数值排序让 card2 排在 card10 前</summary>
     private static readonly StringComparer ZhCnComparer =
-        StringComparer.Create(new CultureInfo("zh-CN"), CompareOptions.None);
+        StringComparer.Create(new CultureInfo("zh-CN"), CompareOptions.NumericOrdering);
 
     /// <summary>路径规范化：反斜杠转正斜杠并小写（收藏匹配大小写/分隔符不敏感，对应原版 normalizePath）</summary>
     public static string NormalizePath(string path) => path.Replace('\\', '/').ToLowerInvariant();

@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
 using HS2Tools.Services;
-using Xunit.Abstractions;
 
 namespace HS2Tools.Tests;
 
@@ -141,12 +140,12 @@ public class GoComparisonTests : IDisposable
 
     private void RequireGo()
     {
-        Skip.If(GoCli.Value == null, "Go scanner CLI 不可用（构建失败或 Go 工具链缺失）");
+        Assert.SkipWhen(GoCli.Value == null, "Go scanner CLI 不可用（构建失败或 Go 工具链缺失）");
     }
 
     // ==================== 对照测试 ====================
 
-    [SkippableFact]
+    [Fact]
     public void ZipMod_MatchGo()
     {
         RequireGo();
@@ -166,7 +165,7 @@ public class GoComparisonTests : IDisposable
         Assert.Equal(cs.Count, go.EnumerateObject().Count());
     }
 
-    [SkippableFact]
+    [Fact]
     public void ScanDir_MatchGo_InOrder()
     {
         RequireGo();
@@ -187,7 +186,7 @@ public class GoComparisonTests : IDisposable
         Assert.Equal(go, cs);
     }
 
-    [SkippableFact]
+    [Fact]
     public async Task PngModsBatch_MatchGo()
     {
         RequireGo();
@@ -200,7 +199,8 @@ public class GoComparisonTests : IDisposable
             e => e.GetProperty("path").GetString()!,
             e => e.GetProperty("modIds").EnumerateArray().Select(x => x.GetString()!).OrderBy(x => x).ToArray());
 
-        var csResults = await _svc.ReadPngModsBatchAsync(new[] { p1, p2 });
+        var csResults = await _svc.ReadPngModsBatchAsync(
+            new[] { p1, p2 }, ct: TestContext.Current.CancellationToken);
         var csMap = csResults.ToDictionary(r => r.Path, r => r.ModIDs.OrderBy(x => x).ToArray());
 
         Assert.Equal(goMap.Count, csMap.Count);
@@ -215,11 +215,11 @@ public class GoComparisonTests : IDisposable
     /// （仅数据区）的差异统计（差异预期存在——结构化解析有 KKEx 命名空间隔离、名字有序去重），
     /// 断言宽松。环境变量 HS2_REAL_CARD_DIRS（分号分隔目录）指向真实卡片目录时执行。
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void RealCards_StructuralParse()
     {
         var dirsEnv = Environment.GetEnvironmentVariable("HS2_REAL_CARD_DIRS");
-        Skip.If(string.IsNullOrWhiteSpace(dirsEnv), "未设置 HS2_REAL_CARD_DIRS（真实卡片目录，分号分隔）");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(dirsEnv), "未设置 HS2_REAL_CARD_DIRS（真实卡片目录，分号分隔）");
 
         var files = 0;
         var structuralOk = 0;
@@ -267,7 +267,7 @@ public class GoComparisonTests : IDisposable
         Assert.True(structuralOk > files / 2, $"structural hit rate too low: {structuralOk}/{files}");
     }
 
-    [SkippableFact]
+    [Fact]
     public async Task ZipModBatch_MatchGo()
     {
         RequireGo();
@@ -277,7 +277,8 @@ public class GoComparisonTests : IDisposable
         var request = JsonSerializer.Serialize(new { action = "readZipModBatch", paths = new[] { z1, z2 }, concurrency = 4 });
         var go = RunGo("-json", request);
 
-        var cs = await _svc.ReadZipModBatchAsync(new[] { z1, z2 });
+        var cs = await _svc.ReadZipModBatchAsync(
+            new[] { z1, z2 }, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(go.EnumerateObject().Count(), cs.Count);
         foreach (var (guid, info) in cs)
