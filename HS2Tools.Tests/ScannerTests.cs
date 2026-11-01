@@ -216,7 +216,7 @@ public class ScannerTests : IDisposable
         var path = TestAssets.WritePng(_dir, "card.png",
             TestAssets.PngPrefix(), TestAssets.BuildCharaDataRegion(Array.Empty<string>(),
                 new[] { " \t[Ω-G16] HS2-KK Set\r\n", "Blue Archive ", "七色的人偶.夜々" }));
-        var expected = new[] { "[Ω-G16] HS2-KK Set", "Blue Archive", "七色的人偶.夜々" };
+        var expected = new[] { " [Ω-G16] HS2-KK Set", "Blue Archive ", "七色的人偶.夜々" };
 
         Assert.Equal(expected, _svc.ReadPngMods(path));
         Assert.Equal(expected, _svc.ParsePngData(path).ModIDs);

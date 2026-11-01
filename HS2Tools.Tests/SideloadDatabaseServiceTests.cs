@@ -56,14 +56,14 @@ public class SideloadDatabaseServiceTests : IDisposable
             ["Blue Archive "] = "blue.zipmod",
         });
 
-        Assert.Equal("omega.zipmod", db.Database["[Ω-G16] HS2-KK Set"]);
-        Assert.Equal("blue.zipmod", db.Database["Blue Archive"]);
+        Assert.Equal("omega.zipmod", db.Database[" [Ω-G16] HS2-KK Set"]);
+        Assert.Equal("blue.zipmod", db.Database["Blue Archive "]);
 
         using var config2 = NewConfig();
         var reloaded = new SideloadDatabaseService(config2);
-        Assert.Equal("omega.zipmod", reloaded.Database["[Ω-G16] HS2-KK Set"]);
-        Assert.Equal("blue.zipmod", reloaded.Database["Blue Archive"]);
-        Assert.DoesNotContain("Blue Archive ", reloaded.Database.Keys);
+        Assert.Equal("omega.zipmod", reloaded.Database[" [Ω-G16] HS2-KK Set"]);
+        Assert.Equal("blue.zipmod", reloaded.Database["Blue Archive "]);
+        Assert.DoesNotContain("Blue Archive", reloaded.Database.Keys);
     }
 
     [Fact]

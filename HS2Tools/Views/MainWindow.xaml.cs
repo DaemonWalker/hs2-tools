@@ -61,6 +61,23 @@ public partial class MainWindow : Window
                 failed > 0 ? $"已移回 {moved} 个，失败 {failed} 个（详见 error.log）" : $"已移回 {moved} 个",
                 "移回完成", MessageBoxButton.OK, MessageBoxImage.Information);
         };
+
+        vm.GuidRepairConfirmationRequested += async (_, msg) =>
+        {
+            var result = MessageBox.Show(this, msg,
+                "修复 zipmod 的 GUID 首尾空格？", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes)
+            {
+                vm.DismissGuidRepair();
+                return;
+            }
+            var (modified, copied, failed) = await vm.ConfirmGuidRepairAsync();
+            MessageBox.Show(this,
+                $"已修改 {modified} 个源文件，复制 {copied} 个 zipmod" +
+                (failed > 0 ? $"，失败 {failed} 个（详见 error.log）" : "。"),
+                "GUID 修复完成", MessageBoxButton.OK,
+                failed > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+        };
     }
 
     private static void Navigate<T>() where T : UserControl => App.Services.Pages.Show<T>();

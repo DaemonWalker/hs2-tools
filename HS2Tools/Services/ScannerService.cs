@@ -213,10 +213,10 @@ public class ScannerService
             if (structuralOk)
                 return wantNames ? names : NormalizeGuids(modIds);
             ErrorLog.Log($"structural parse failed, fallback to byte scan in data region ({data.Length - offset} bytes)");
-            return wantNames ? SearchNames(data.AsSpan(offset)) : NormalizeGuids(SearchBuffer(ModStart, ModEnd, data.AsSpan(offset)));
+            return wantNames ? SearchNames(data.AsSpan(offset)) : NormalizeGuids(SearchBuffer(ModStart, ModEnd, data.AsSpan(offset), trim: false));
         }
         // 无 IEND（非卡片文件）：保持旧行为，全文件回退扫描
-        return wantNames ? SearchNames(data) : NormalizeGuids(SearchBuffer(ModStart, ModEnd, data));
+        return wantNames ? SearchNames(data) : NormalizeGuids(SearchBuffer(ModStart, ModEnd, data, trim: false));
     }
 
     /// <summary>
@@ -282,9 +282,10 @@ public class ScannerService
 
     /// <summary>
     /// 回退路径：从 Buffer 中循环提取所有 [start...end] 区间的字符串（Go searchBuffer）。
-    /// 命中区间去首尾各 1 字节再 Trim；结果去重且无序。
+    /// 命中区间去首尾各 1 字节；名称默认 Trim，Mod GUID 传 trim=false 保留首尾空格。
     /// </summary>
-    internal static List<string> SearchBuffer(ReadOnlySpan<byte> start, ReadOnlySpan<byte> end, ReadOnlySpan<byte> data)
+    internal static List<string> SearchBuffer(ReadOnlySpan<byte> start, ReadOnlySpan<byte> end,
+        ReadOnlySpan<byte> data, bool trim = true)
     {
         var result = new HashSet<string>();
         var pos = 0;
@@ -309,7 +310,7 @@ public class ScannerService
                 contentStart += 1;
                 contentEnd -= 1;
             }
-            var str = BufferToString(data[contentStart..contentEnd]);
+            var str = BufferToString(data[contentStart..contentEnd], trim);
             if (str != "")
                 result.Add(str);
 
@@ -321,11 +322,12 @@ public class ScannerService
     }
 
     /// <summary>
-    /// Buffer 转字符串 + TrimSpace。
+    /// Buffer 转字符串；Mod GUID 调用方传 trim=false，避免空格变体在匹配前丢失。
     /// 注意：Go string(bytes) 对无效 UTF-8 保留原始字节，.NET 默认替换为 U+FFFD——
     /// 乱码卡名输出可能与原版不同（迁移文档已记录，测试期确认可接受）。
     /// </summary>
-    private static string BufferToString(ReadOnlySpan<byte> buffer) => Encoding.UTF8.GetString(buffer).Trim();
+    private static string BufferToString(ReadOnlySpan<byte> buffer, bool trim) =>
+        trim ? Encoding.UTF8.GetString(buffer).Trim() : Encoding.UTF8.GetString(buffer);
 
     /// <summary>读取单个 PNG 文件的缩略图（Base64）。读盘失败返回空串（与原版一致）</summary>
     public string ReadPngImage(string filePath)
@@ -382,7 +384,7 @@ public class ScannerService
             ErrorLog.Log($"ParsePngData structural parse failed, fallback to byte scan: {filePath}");
             var region = data.AsSpan(offset);
             names = SearchNames(region);
-            modIds = SearchBuffer(ModStart, ModEnd, region);
+            modIds = SearchBuffer(ModStart, ModEnd, region, trim: false);
         }
 
         return new PngParseResult
@@ -546,23 +548,19 @@ public class ScannerService
         return sb.ToString().Trim();
     }
 
-    /// <summary>规范化 Mod GUID：保留 Unicode，移除控制字符并清理首尾空白</summary>
+    /// <summary>规范化 Mod GUID：保留 Unicode 与首尾空格，仅移除控制字符</summary>
     internal static string NormalizeGuid(string str)
     {
-        var alreadyTrimmed = str.AsSpan().Trim().Length == str.Length;
-        if (alreadyTrimmed)
+        var hasControl = false;
+        foreach (var r in str.EnumerateRunes())
         {
-            var hasControl = false;
-            foreach (var r in str.EnumerateRunes())
-            {
-                if (!Rune.IsControl(r))
-                    continue;
-                hasControl = true;
-                break;
-            }
-            if (!hasControl)
-                return str;
+            if (!Rune.IsControl(r))
+                continue;
+            hasControl = true;
+            break;
         }
+        if (!hasControl)
+            return str;
 
         var sb = new StringBuilder(str.Length);
         foreach (var r in str.EnumerateRunes())
@@ -570,7 +568,7 @@ public class ScannerService
             if (!Rune.IsControl(r))
                 sb.Append(r.ToString());
         }
-        return sb.ToString().Trim();
+        return sb.ToString();
     }
 
     private static List<string> NormalizeGuids(IEnumerable<string> guids) =>
