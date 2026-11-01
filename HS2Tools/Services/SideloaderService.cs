@@ -273,6 +273,15 @@ public class SideloaderService : ISideloaderService
                 else
                     onLog?.Invoke($"Skipping {mod.Url}: {outcome}");
             }
+            catch (OperationCanceledException) when (run.Cancelled)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref run.FailedMods);
+                onLog?.Invoke($"Failed to process {mod.Url}: {ex.Message}");
+            }
             finally
             {
                 var processed = Interlocked.Increment(ref run.Processed);

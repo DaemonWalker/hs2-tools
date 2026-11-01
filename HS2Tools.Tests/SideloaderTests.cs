@@ -295,6 +295,36 @@ public class SideloaderTests : IDisposable
     }
 
     [Fact]
+    public async Task Crawl_TruncatedRangeResponse_CountsFailureAndContinues()
+    {
+        var broken = File.ReadAllBytes(WriteBigZipmod(_dir, "broken.zipmod",
+            MakeManifest("com.test.broken"), dummyEntries: 1500));
+        var valid = File.ReadAllBytes(WriteZipmod(_dir, "valid.zipmod",
+            MakeManifest("com.test.valid"), deflate: false));
+        _server.MapHtml("/", """
+            <table id="indexlist">
+            <tr><th>Name</th></tr>
+            <tr><td><a href="../">../</a></td></tr>
+            <tr><td><a href="broken.zipmod">broken.zipmod</a></td></tr>
+            <tr><td><a href="valid.zipmod">valid.zipmod</a></td></tr>
+            </table>
+            """);
+        _server.MapFileWithTruncatedExplicitRange("/broken.zipmod", broken);
+        _server.MapFile("/valid.zipmod", valid);
+
+        var logs = new List<string>();
+        var svc = new SideloaderService(baseUrl: _server.BaseUrl);
+        var result = await svc.RunAsync(logs.Add);
+
+        Assert.Equal(2, result.DiscoveredMods);
+        Assert.Equal(1, result.FailedMods);
+        Assert.Equal("valid.zipmod", result.Mods["com.test.valid"].Url);
+        Assert.DoesNotContain("com.test.broken", result.Mods.Keys);
+        Assert.Contains(logs, l => l.Contains("Failed to process") && l.Contains("broken.zipmod"));
+        Assert.Contains(logs, l => l.Contains("Crawl completed, found 2 mods"));
+    }
+
+    [Fact]
     public async Task Crawl_HashDirectory_DoesNotLoop()
     {
         // 目录名含 #（KKEC 的 #KK_MaterialEditor）：修复前请求被 fragment 截断回落到父目录，无限递归

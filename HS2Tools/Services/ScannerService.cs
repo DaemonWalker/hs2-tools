@@ -393,7 +393,7 @@ public class ScannerService
             ModIDs = NormalizeGuids(modIds),
             CharaNames = names,
             GameDataLen = Math.Max(0, data.Length - offset),
-            ImageData = includeImage ? data : Array.Empty<byte>(),
+            ImageData = includeImage ? (offset == data.Length ? data : data[..offset]) : Array.Empty<byte>(),
             ImageLength = includeImage ? offset : 0,
             FileLength = data.Length,
             LastWriteTimeUtcTicks = File.GetLastWriteTimeUtc(filePath).Ticks,
@@ -501,7 +501,7 @@ public class ScannerService
             var offset = FindPngEnd(data);
             if (offset < 0)
                 return null;
-            cached.ImageData = data;
+            cached.ImageData = offset == data.Length ? data : data[..offset];
             cached.ImageLength = offset;
             cached.GameDataLen = Math.Max(0, data.Length - offset);
             cached.FileLength = data.Length;

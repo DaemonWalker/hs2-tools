@@ -696,6 +696,28 @@ internal sealed class TestHttpServer : IDisposable
     public void MapFile(string path, byte[] data, bool supportRange = true) =>
         _routes[path] = (req, resp) => ServeFile(req, resp, data, supportRange);
 
+    public void MapFileWithTruncatedExplicitRange(string path, byte[] data) =>
+        _routes[path] = async (req, resp) =>
+        {
+            var rangeHeader = req.Headers["Range"];
+            if (rangeHeader?.StartsWith("bytes=-", StringComparison.Ordinal) == true)
+            {
+                await ServeFile(req, resp, data, supportRange: true);
+                return;
+            }
+
+            var m = Regex.Match(rangeHeader ?? "", @"^bytes=(\d+)-(\d+)$");
+            var start = long.Parse(m.Groups[1].Value);
+            var end = Math.Min(long.Parse(m.Groups[2].Value), data.Length - 1);
+            var len = end - start + 1;
+            resp.StatusCode = 206;
+            resp.Headers["Content-Range"] = $"bytes {start}-{end}/{data.Length}";
+            resp.ContentLength64 = len;
+            await resp.OutputStream.WriteAsync(data.AsMemory((int)start, 1));
+            await resp.OutputStream.FlushAsync();
+            resp.Abort();
+        };
+
     public void MapStatus(string path, int status) =>
         _routes[path] = (req, resp) =>
         {

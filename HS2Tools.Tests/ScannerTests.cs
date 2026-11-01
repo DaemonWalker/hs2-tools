@@ -439,6 +439,22 @@ public class ScannerTests : IDisposable
         Assert.Equal(new[] { "角色" }, result.CharaNames);
     }
 
+    [Fact]
+    public void ReadPngPageData_CachedResult_OnlyRetainsPngBytes()
+    {
+        var prefix = TestAssets.PngPrefix();
+        var gameData = TestAssets.BuildCharaDataRegion(new[] { "角色" }, Array.Empty<string>());
+        var path = TestAssets.WritePng(_dir, "card.png", prefix, gameData);
+        var cached = _svc.ParsePngData(path);
+
+        var result = _svc.ReadPngPageData(path, cached);
+
+        Assert.NotNull(result);
+        Assert.Equal(prefix, result.ImageData);
+        Assert.Equal(prefix.Length, result.ImageLength);
+        Assert.Equal(gameData.Length, result.GameDataLen);
+    }
+
     // ==================== 批量 ====================
 
     [Fact]
@@ -477,7 +493,8 @@ public class ScannerTests : IDisposable
         {
             Assert.Single(r.CharaNames);
             Assert.True(r.ImageLength > 0);
-            Assert.Equal(r.ImageLength, r.ImageData.Length - r.GameDataLen);
+            Assert.Equal(r.ImageLength, r.ImageData.Length);
+            Assert.Equal(TestAssets.PngPrefix(), r.ImageData);
         });
     }
 
