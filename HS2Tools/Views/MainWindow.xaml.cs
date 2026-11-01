@@ -90,4 +90,19 @@ public partial class MainWindow : Window
     private void NavSideload_Click(object sender, RoutedEventArgs e) => Navigate<SideloadView>();
     private void NavDownload_Click(object sender, RoutedEventArgs e) => Navigate<DownloadView>();
     private void NavSettings_Click(object sender, RoutedEventArgs e) => Navigate<SettingsView>();
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void MaximizeRestoreButton_Click(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void MainWindow_StateChanged(object? sender, EventArgs e)
+    {
+        var maximized = WindowState == WindowState.Maximized;
+        MaximizeRestoreIcon.Text = maximized ? "\uE923" : "\uE922";
+        MaximizeRestoreButton.ToolTip = maximized ? "还原" : "最大化";
+        System.Windows.Automation.AutomationProperties.SetName(MaximizeRestoreButton, maximized ? "还原" : "最大化");
+    }
 }
