@@ -115,7 +115,9 @@ public partial class SideloadWindowViewModel : ObservableObject
             {
                 SideloadScanStatus.Success => $"上次扫描：{time}（成功结束，发现 {meta.FoundCount} 个 Mods）",
                 SideloadScanStatus.Stopped => $"上次扫描：{time}（已停止，已发现 {meta.FoundCount} 个）",
-                SideloadScanStatus.PartialFailure => $"上次扫描：{time}（部分失败 {meta.FailedCount} 处，已保留旧数据；本轮发现 {meta.FoundCount} 个）",
+                SideloadScanStatus.PartialFailure => meta.ResultApplied
+                    ? $"上次扫描：{time}（部分失败 {meta.FailedCount} 处，已使用本轮结果；发现 {meta.FoundCount} 个）"
+                    : $"上次扫描：{time}（部分失败 {meta.FailedCount} 处，已保留旧数据；本轮发现 {meta.FoundCount} 个）",
                 _ => $"上次扫描：{time}（异常终止：{meta.Error}）",
             };
         }

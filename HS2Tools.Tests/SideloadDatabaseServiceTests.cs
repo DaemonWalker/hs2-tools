@@ -36,7 +36,8 @@ public class SideloadDatabaseServiceTests : IDisposable
         db.Update(new Dictionary<string, string> { ["g1"] = "dir/g1.zipmod" });
 
         Assert.Equal(1, changed);
-        Assert.True(File.Exists(SourcePath("hs2")));
+        Assert.True(File.Exists(Path.Combine(_dir, "analysis-cache.db")));
+        Assert.False(File.Exists(SourcePath("hs2"))); // 新数据只写 SQLite
 
         using var config2 = NewConfig();
         var reloaded = new SideloadDatabaseService(config2);
@@ -66,6 +67,26 @@ public class SideloadDatabaseServiceTests : IDisposable
     }
 
     [Fact]
+    public void Update_PersistsLastModifiedFingerprint()
+    {
+        using var config = NewConfig();
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, SideloadEntry>
+        {
+            ["g1"] = new()
+            {
+                Url = "dir/g1.zipmod", SizeText = "1.0 KB", MtimeText = "2020-10-20 12:27",
+            },
+        });
+
+        using var config2 = NewConfig();
+        var reloaded = new SideloadDatabaseService(config2);
+        var known = reloaded.GetKnownMods()["dir/g1.zipmod"];
+        Assert.Equal("2020-10-20 12:27", known.MtimeText);
+        Assert.Equal("1.0 KB", known.SizeText);
+    }
+
+    [Fact]
     public void Update_MergesAndRetires_OnlyAfterTwoFullScans()
     {
         using var config = NewConfig();
@@ -77,7 +98,7 @@ public class SideloadDatabaseServiceTests : IDisposable
         Assert.Equal(3, db.Database.Count);
         Assert.True(db.Database.ContainsKey("g2"));
 
-        // 第三轮：g2 连续两轮完整扫描未见 → 淘汰；g3 上轮首见，本轮未见仍保留
+        // 第三轮：g2 连续两轮已应用扫描未见 → 淘汰；g3 上轮首见，本轮未见仍保留
         db.Update(new Dictionary<string, string> { ["g1"] = "a/g1.zipmod" });
         Assert.False(db.Database.ContainsKey("g2"));
         Assert.True(db.Database.ContainsKey("g3"));
@@ -108,19 +129,18 @@ public class SideloadDatabaseServiceTests : IDisposable
     }
 
     [Fact]
-    public void Sources_AreIsolated_PerSourceFiles()
+    public void Sources_AreIsolated_PerSourceRows()
     {
         using var config = NewConfig();
         var db = new SideloadDatabaseService(config);
 
-        // hs2 数据源更新落 sideload-hs2.json
         db.Update(new Dictionary<string, string> { ["g-hs2"] = "a/g-hs2.zipmod" });
-        // 切到 kk（kkec 数据源）更新落 sideload-kkec.json
-        config.Update(s => s.CurrentGame = "kk");
+        config.Update(s => s.CurrentGame = "kk"); // kk/kks 共用 kkec source_id
         db.Update(new Dictionary<string, string> { ["g-kk"] = "b/g-kk.zipmod" });
 
-        Assert.True(File.Exists(SourcePath("hs2")));
-        Assert.True(File.Exists(SourcePath("kkec")));
+        Assert.True(File.Exists(Path.Combine(_dir, "analysis-cache.db")));
+        Assert.False(File.Exists(SourcePath("hs2")));
+        Assert.False(File.Exists(SourcePath("kkec")));
 
         // 切回 hs2 / 切到 kks（与 kk 共享 kkec 库）：各自读到自己的库，互不干扰
         config.Update(s => s.CurrentGame = "hs2");
@@ -161,8 +181,9 @@ public class SideloadDatabaseServiceTests : IDisposable
         using var config = NewConfig();
         var db = new SideloadDatabaseService(config);
 
-        Assert.False(File.Exists(Path.Combine(_dir, "sideload.json"))); // 旧文件已改名
-        Assert.True(File.Exists(SourcePath("hs2")));
+        Assert.False(File.Exists(Path.Combine(_dir, "sideload.json")));
+        Assert.True(File.Exists(Path.Combine(_dir, "sideload.json.migrated"))); // 原文件留作迁移备份
+        Assert.False(File.Exists(SourcePath("hs2")));
         Assert.Equal("old/g.zipmod", Assert.Single(db.Database).Value); // 内容成为 hs2 数据源的库
     }
 
@@ -235,12 +256,13 @@ public class SideloadDatabaseServiceTests : IDisposable
 
         Assert.Equal(1, metaChanged); // 随 MetaChanged 通知（不触发整表重建用的 Changed）
         Assert.Equal(0, changed);
-        Assert.True(File.Exists(MetaPath("hs2")));
+        Assert.True(File.Exists(Path.Combine(_dir, "analysis-cache.db")));
+        Assert.False(File.Exists(MetaPath("hs2")));
         Assert.Equal(42, db.GetMeta()!.FoundCount); // 缓存命中
 
         using var config2 = NewConfig();
         var reloaded = new SideloadDatabaseService(config2);
-        var loaded = reloaded.GetMeta(); // 跨实例从磁盘读回
+        var loaded = reloaded.GetMeta(); // 跨实例从 SQLite 读回
         Assert.NotNull(loaded);
         Assert.Equal(SideloadScanStatus.Success, loaded.Status);
         Assert.Equal(meta.LastScanTime, loaded.LastScanTime);
@@ -259,13 +281,13 @@ public class SideloadDatabaseServiceTests : IDisposable
 
         config.Update(s => s.CurrentGame = "kk");
         Assert.Null(db.GetMeta()); // kkec 数据源无 meta
-        Assert.False(File.Exists(MetaPath("kkec")));
 
         db.SaveMeta(new SideloadScanMeta
         {
             LastScanTime = DateTime.Now, Status = SideloadScanStatus.Stopped, FoundCount = 7,
         });
-        Assert.True(File.Exists(MetaPath("kkec")));
+        Assert.Equal(SideloadScanStatus.Stopped, db.GetMeta()!.Status);
+        Assert.Equal(7, db.GetMeta()!.FoundCount);
 
         config.Update(s => s.CurrentGame = "hs2");
         Assert.Equal(SideloadScanStatus.Success, db.GetMeta()!.Status); // 各数据源独立

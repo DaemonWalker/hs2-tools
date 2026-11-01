@@ -291,19 +291,21 @@ public class ConfigServiceTests : IDisposable
     }
 
     [Fact]
-    public void MigrateFromAppData_CopiesSettingsAndSideload_SkipsExisting()
+    public void MigrateFromAppData_CopiesSettingsCacheAndSideload_SkipsExisting()
     {
         var src = Path.Combine(_dir, "appdata");
         var dst = Path.Combine(_dir, "data");
         Directory.CreateDirectory(src);
         Directory.CreateDirectory(dst);
         File.WriteAllText(Path.Combine(src, "settings.json"), """{"currentGame":"kk"}""");
+        File.WriteAllText(Path.Combine(src, "analysis-cache.db"), "sqlite-data");
         File.WriteAllText(Path.Combine(src, "sideload-hs2.json"), "[]");
         File.WriteAllText(Path.Combine(dst, "settings.json"), """{"currentGame":"hs2"}"""); // 已有则不覆盖
 
         ConfigService.MigrateFromAppData(dst, src);
 
         Assert.Equal("""{"currentGame":"hs2"}""", File.ReadAllText(Path.Combine(dst, "settings.json")));
+        Assert.Equal("sqlite-data", File.ReadAllText(Path.Combine(dst, "analysis-cache.db")));
         Assert.Equal("[]", File.ReadAllText(Path.Combine(dst, "sideload-hs2.json")));
     }
 

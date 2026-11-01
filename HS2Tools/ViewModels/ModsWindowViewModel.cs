@@ -22,7 +22,7 @@ public partial class ModItemViewModel : ObservableObject
 /// 本地模组窗口 ViewModel（对应原版 Mods/LocalMods.tsx）：
 /// 统计三卡（本地 Mods 总数 / 被引用 Mods 数 / 总引用次数，与首页数据概览同口径）、
 /// 所有/未使用筛选、刷新重扫 mods 目录 zipmod。
-/// 去重/整理不重扫磁盘，以首页「开始分析」持久化的缓存（ModEntries/CharaUsage/SceneUsage）为数据源。
+/// 去重/整理/清理不重扫磁盘，以首页「开始分析」持久化的缓存（ModEntries/CharaUsage/SceneUsage）为数据源。
 /// </summary>
 public partial class ModsWindowViewModel : ObservableObject
 {
@@ -58,6 +58,7 @@ public partial class ModsWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
     [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CleanupCommand))]
     [NotifyCanExecuteChangedFor(nameof(OrganizeCommand))]
     [NotifyPropertyChangedFor(nameof(RefreshButtonText))]
     [NotifyPropertyChangedFor(nameof(EmptyText))]
@@ -66,6 +67,7 @@ public partial class ModsWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
     [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CleanupCommand))]
     [NotifyCanExecuteChangedFor(nameof(OrganizeCommand))]
     [NotifyPropertyChangedFor(nameof(DedupButtonText))]
     private bool _isDeduping;
@@ -73,6 +75,15 @@ public partial class ModsWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
     [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CleanupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OrganizeCommand))]
+    [NotifyPropertyChangedFor(nameof(CleanupButtonText))]
+    private bool _isCleaning;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
+    [NotifyCanExecuteChangedFor(nameof(DedupCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CleanupCommand))]
     [NotifyCanExecuteChangedFor(nameof(OrganizeCommand))]
     [NotifyPropertyChangedFor(nameof(OrganizeButtonText))]
     private bool _isOrganizing;
@@ -81,6 +92,8 @@ public partial class ModsWindowViewModel : ObservableObject
 
     public string DedupButtonText => IsDeduping ? "去重中..." : "去重 Mods";
 
+    public string CleanupButtonText => IsCleaning ? "清理中..." : "清理 Mods";
+
     public string OrganizeButtonText => IsOrganizing ? "整理中..." : "整理 Mods";
 
     /// <summary>请求用户确认去重（View 订阅弹确认框，确认后调 <see cref="ConfirmDedupAsync"/>）</summary>
@@ -88,6 +101,12 @@ public partial class ModsWindowViewModel : ObservableObject
 
     /// <summary>去重普通提示（无重复 / 完成汇总等，View 订阅弹 MessageBox）</summary>
     public event EventHandler<string>? DedupMessageRequested;
+
+    /// <summary>请求用户确认永久清理（View 订阅弹确认框，确认后调 <see cref="ConfirmCleanupAsync"/>）</summary>
+    public event EventHandler<string>? CleanupConfirmationRequested;
+
+    /// <summary>清理普通提示（无可清理项 / 完成汇总等，View 订阅弹 MessageBox）</summary>
+    public event EventHandler<string>? CleanupMessageRequested;
 
     /// <summary>请求用户确认整理（View 订阅弹确认框，确认后调 <see cref="ConfirmOrganizeAsync"/>）</summary>
     public event EventHandler<string>? OrganizeConfirmationRequested;
@@ -99,6 +118,9 @@ public partial class ModsWindowViewModel : ObservableObject
     private Dictionary<string, ModInfo>? _pendingWinners;
     private List<ModInfo>? _pendingLosers;
     private string? _pendingDupDir;
+
+    // 清理待执行计划（确认后由 ConfirmCleanupAsync 消费）
+    private List<ModScanEntry>? _pendingCleanup;
 
     // 整理待执行计划（确认后由 ConfirmOrganizeAsync 消费；目标目录已在计划内）
     private ModOrganizePlan? _pendingPlan;
@@ -161,11 +183,13 @@ public partial class ModsWindowViewModel : ObservableObject
         }
     }
 
-    private bool CanRefresh() => !IsRefreshing && !IsDeduping && !IsOrganizing;
+    private bool CanRefresh() => !IsRefreshing && !IsDeduping && !IsCleaning && !IsOrganizing;
 
-    private bool CanDedup() => !IsRefreshing && !IsDeduping && !IsOrganizing;
+    private bool CanDedup() => !IsRefreshing && !IsDeduping && !IsCleaning && !IsOrganizing;
 
-    private bool CanOrganize() => !IsRefreshing && !IsDeduping && !IsOrganizing;
+    private bool CanCleanup() => !IsRefreshing && !IsDeduping && !IsCleaning && !IsOrganizing;
+
+    private bool CanOrganize() => !IsRefreshing && !IsDeduping && !IsCleaning && !IsOrganizing;
 
     /// <summary>
     /// 刷新（对应原版 scanMods）：ScanDirectory(.zipmod) + ReadZipModBatchAsync，
@@ -327,6 +351,123 @@ public partial class ModsWindowViewModel : ObservableObject
         finally
         {
             IsDeduping = false;
+        }
+    }
+
+    /// <summary>
+    /// 清理（分析阶段）：从首页分析缓存中找出 mods/unusedmods 内未被引用、不含 shader、
+    /// 且存在于当前 Sideload 数据库的文件；排除下载目录，确认后永久删除。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanCleanup))]
+    private Task CleanupAsync()
+    {
+        IsCleaning = true;
+        try
+        {
+            var modsDir = _config.GetModsDir();
+            var gamePath = _config.Settings.Current.GamePath;
+            if (modsDir is null || string.IsNullOrEmpty(gamePath))
+            {
+                CleanupMessageRequested?.Invoke(this, "请先设置游戏目录");
+                return Task.CompletedTask;
+            }
+            var settings = _config.Settings.Current;
+            if (settings.LastAnalysisTime is not { } scanTime)
+            {
+                CleanupMessageRequested?.Invoke(this, "请先在首页运行「开始分析」");
+                return Task.CompletedTask;
+            }
+
+            var usage = new HashSet<string>(settings.ModUsage.Keys, StringComparer.OrdinalIgnoreCase);
+            var indexed = new HashSet<string>(_sideloadDb.Database.Keys, StringComparer.OrdinalIgnoreCase);
+            var downloadDir = _config.GetModDownloadDir();
+            var unusedDir = Path.Combine(gamePath, "unusedmods");
+            var candidates = settings.ModEntries
+                .Where(e => (IsUnderDir(e.Info.Path, modsDir) || IsUnderDir(e.Info.Path, unusedDir)) &&
+                            !IsUnderDir(e.Info.Path, downloadDir) &&
+                            !usage.Contains(e.Guid) && e.Info.ShaderNames.Count == 0 && indexed.Contains(e.Guid))
+                .GroupBy(e => e.Info.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+            if (candidates.Count == 0)
+            {
+                CleanupMessageRequested?.Invoke(this, "没有符合清理条件的 Mods");
+                return Task.CompletedTask;
+            }
+
+            _pendingCleanup = candidates;
+            CleanupConfirmationRequested?.Invoke(this,
+                $"发现 {candidates.Count} 个未使用、不含 shader 且存在于 Sideload 数据库的 Mods，" +
+                $"将永久删除 mods 和 unusedmods 中对应文件，此操作无法撤销" +
+                $"（基于 {scanTime:yyyy-MM-dd HH:mm} 的分析结果，如手动增删过 Mod 请先重新分析）。是否继续？");
+        }
+        finally
+        {
+            IsCleaning = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>清理（执行阶段）：永久删除确认过的文件，并同步 LocalMods 与完整条目缓存</summary>
+    public async Task ConfirmCleanupAsync()
+    {
+        if (_pendingCleanup is not { } candidates)
+            return;
+        _pendingCleanup = null;
+
+        IsCleaning = true;
+        var (deleted, failed, skipped) = (0, 0, 0);
+        var deletedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var entry in candidates)
+                {
+                    if (!File.Exists(entry.Info.Path))
+                    {
+                        skipped++;
+                        App.LogException(new Exception($"Cleanup delete skipped (file missing): {entry.Info.Path}"));
+                        continue;
+                    }
+                    try
+                    {
+                        File.Delete(entry.Info.Path);
+                        deletedPaths.Add(entry.Info.Path);
+                        deleted++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        App.LogException(new Exception($"Cleanup delete failed: {entry.Info.Path}: {ex.Message}"));
+                    }
+                }
+            });
+
+            var modsDir = _config.GetModsDir();
+            _config.Update(s =>
+            {
+                s.Current.ModEntries.RemoveAll(e => deletedPaths.Contains(e.Info.Path));
+                var mods = new Dictionary<string, ModInfo>(StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in s.Current.ModEntries.Where(e => IsUnderDir(e.Info.Path, modsDir)))
+                {
+                    if (!mods.TryGetValue(entry.Guid, out var existing) ||
+                        ScannerService.CompareModsForKeep(entry.Info, existing) < 0)
+                        mods[entry.Guid] = entry.Info;
+                }
+                s.Current.LocalMods = mods;
+            });
+
+            var summary = $"清理完成：已永久删除 {deleted} 个文件";
+            if (skipped > 0)
+                summary += $"，跳过 {skipped} 个（文件已不存在）";
+            if (failed > 0)
+                summary += $"（{failed} 个失败）";
+            CleanupMessageRequested?.Invoke(this, summary);
+        }
+        finally
+        {
+            IsCleaning = false;
         }
     }
 

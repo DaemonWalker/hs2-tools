@@ -50,10 +50,11 @@ public class MainWindowViewModelTests : IDisposable
                 if (Throw is not null)
                     throw Throw;
                 onLog?.Invoke("Processing: http://example.test/dir/");
-                onProgress?.Report(new SideloaderProgress(Result.Count, 0));
+                onProgress?.Report(new SideloaderProgress(Result.Count, 0, Result.Count));
                 return new SideloadRunResult
                 {
                     Mods = Result.ToDictionary(kv => kv.Key, kv => new SideloadEntry { Url = kv.Value }),
+                    DiscoveredMods = Result.Count,
                     FailedPages = FailedPages,
                     FailedMods = FailedMods,
                 };
@@ -594,7 +595,7 @@ public class MainWindowViewModelTests : IDisposable
         await WaitFor(() => vm.SideloaderState == SideloaderUiState.Stopped);
 
         Assert.True(fake.Cancelled);
-        Assert.False(File.Exists(Path.Combine(_dir, "sideload-hs2.json"))); // 部分结果不落盘
+        Assert.False(db.Database.ContainsKey("g1")); // 部分结果不落盘
     }
 
     [Fact]
@@ -615,7 +616,7 @@ public class MainWindowViewModelTests : IDisposable
         Assert.Equal(SideloadScanStatus.Success, meta.Status);
         Assert.Equal(1, meta.FoundCount);
         Assert.True((DateTime.Now - meta.LastScanTime).TotalMinutes < 1);
-        Assert.True(File.Exists(Path.Combine(_dir, "sideload-hs2.meta.json"))); // 独立 meta 文件落盘
+        Assert.True(File.Exists(Path.Combine(_dir, "analysis-cache.db"))); // 扫描元数据写入 SQLite
     }
 
     [Fact]
@@ -657,7 +658,7 @@ public class MainWindowViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Sideloader_PartialFailure_KeepsOldDatabase()
+    public async Task Sideloader_PartialFailure_Declined_KeepsOldDatabase()
     {
         using var config = new ConfigService(_dir);
         var db = new SideloadDatabaseService(config);
@@ -665,22 +666,58 @@ public class MainWindowViewModelTests : IDisposable
 
         var fake = new FakeSideloader { Result = new() { ["g1"] = "dir/g1.zipmod" }, FailedPages = 1 };
         var vm = MakeVm(config, db, factory: () => fake);
+        string? confirmation = null;
+        vm.PartialResultConfirmationRequested += (_, msg) => confirmation = msg;
 
         vm.ToggleSideloaderCommand.Execute(null);
         await WaitFor(() => fake.IsRunning);
         fake.Gate.SetResult();
         await WaitFor(() => vm.SideloaderState == SideloaderUiState.Partial);
 
-        // A 策略：有抓取失败时保留旧库，新结果不覆盖（内存与磁盘都不变）
+        Assert.NotNull(confirmation);
+        Assert.Contains("是否仍要更新", confirmation);
+        Assert.False(vm.SwitchGameCommand.CanExecute("kk")); // 待确认结果不能落错数据源
         Assert.Equal("dir/old.zipmod", db.Database["old"]);
         Assert.False(db.Database.ContainsKey("g1"));
+
+        vm.ConfirmPartialSideloaderResult(false);
+
         var reloaded = new SideloadDatabaseService(config);
         Assert.Equal("dir/old.zipmod", reloaded.Database["old"]);
-
+        Assert.False(reloaded.Database.ContainsKey("g1"));
         var meta = db.GetMeta();
         Assert.Equal(SideloadScanStatus.PartialFailure, meta!.Status);
         Assert.Equal(1, meta.FailedCount);
         Assert.Equal(1, meta.FoundCount);
+        Assert.False(meta.ResultApplied);
+    }
+
+    [Fact]
+    public async Task Sideloader_PartialFailure_Accepted_UpdatesDatabase()
+    {
+        using var config = new ConfigService(_dir);
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, string> { ["old"] = "dir/old.zipmod" });
+
+        var fake = new FakeSideloader { Result = new() { ["g1"] = "dir/g1.zipmod" }, FailedMods = 1 };
+        var vm = MakeVm(config, db, factory: () => fake);
+        vm.PartialResultConfirmationRequested += (_, _) => { };
+
+        vm.ToggleSideloaderCommand.Execute(null);
+        await WaitFor(() => fake.IsRunning);
+        fake.Gate.SetResult();
+        await WaitFor(() => vm.SideloaderState == SideloaderUiState.Partial);
+        vm.ConfirmPartialSideloaderResult(true);
+
+        Assert.Equal(SideloaderUiState.Success, vm.SideloaderState);
+        Assert.Equal("dir/g1.zipmod", db.Database["g1"]);
+        Assert.Equal("dir/old.zipmod", db.Database["old"]);
+        var reloaded = new SideloadDatabaseService(config);
+        Assert.Equal("dir/g1.zipmod", reloaded.Database["g1"]);
+        var meta = reloaded.GetMeta();
+        Assert.Equal(SideloadScanStatus.PartialFailure, meta!.Status);
+        Assert.True(meta.ResultApplied);
+        Assert.True(vm.SwitchGameCommand.CanExecute("kk"));
     }
 
     [Fact]
@@ -735,7 +772,8 @@ public class MainWindowViewModelTests : IDisposable
         vm.DownloadBaseUrlOverride = server.BaseUrl;
         vm.GamePath = gameDir;
 
-        Assert.Equal(2, vm.MissingModCount);
+        Assert.Equal(2, vm.DownloadableModCount);
+        Assert.Equal(0, vm.MissingModCount);
         Assert.True(vm.ComplementMissingModsCommand.CanExecute(null));
 
         var complement = vm.ComplementMissingModsCommand.ExecuteAsync(null);
@@ -799,25 +837,29 @@ public class MainWindowViewModelTests : IDisposable
     }
 
     [Fact]
-    public void MissingModCount_OnlyUsageMissingLocallyAndInDatabase()
+    public void DependencyCounts_SplitDownloadableAndMissing()
     {
         using var config = new ConfigService(_dir);
         var db = new SideloadDatabaseService(config);
         db.Update(new Dictionary<string, string>
         {
-            ["g-missing"] = "a/g-missing.zipmod",
+            ["g-download"] = "a/g-download.zipmod",
             ["g-owned"] = "a/g-owned.zipmod",
-            // g-not-in-db 不在库中
+            // g-missing 不在库中
         });
         config.Update(s =>
         {
-            s.Current.ModUsage["g-missing"] = 1;
+            s.Current.ModUsage["g-download"] = 1;
             s.Current.ModUsage["g-owned"] = 2;
-            s.Current.ModUsage["g-not-in-db"] = 3;
+            s.Current.ModUsage["g-missing"] = 3;
             s.Current.LocalMods["g-owned"] = new ModInfo { Name = "Owned" };
         });
 
         var vm = MakeVm(config, db);
-        Assert.Equal(1, vm.MissingModCount); // 只有 g-missing 计入
+        Assert.Equal(1, vm.DownloadableModCount);
+        Assert.Equal(1, vm.MissingModCount);
+        Assert.True(vm.HasDownloadableMods);
+        Assert.True(vm.HasMissingMods);
+        Assert.False(vm.ShowModsReady);
     }
 }

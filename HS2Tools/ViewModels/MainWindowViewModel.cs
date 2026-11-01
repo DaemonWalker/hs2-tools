@@ -51,6 +51,7 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly AnalysisCacheService? _analysisCache;
 
     private ISideloaderService? _currentSideloader;
+    private SideloadRunResult? _pendingSideloadResult;
     private bool _stopRequested;
 
     /// <summary>已按之加载的游戏 ID（Changed 时与 Settings.CurrentGame 比较，识别"游戏被切换"）</summary>
@@ -88,6 +89,9 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>请求用户确认停止爬虫（View 订阅弹确认框，确认后调 <see cref="ConfirmStopSideloader"/>）</summary>
     public event EventHandler? StopConfirmationRequested;
 
+    /// <summary>部分抓取失败时请求用户确认是否使用本轮结果</summary>
+    public event EventHandler<string>? PartialResultConfirmationRequested;
+
     /// <summary>测试用：非 null 时覆盖下载 base URL（默认取当前游戏档案的 SideloadBaseUrl）</summary>
     internal string? DownloadBaseUrlOverride;
 
@@ -114,8 +118,9 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>当前游戏档案（标题/路径卡片等文案绑定其 DisplayName/GameExeName）</summary>
     public GameProfile CurrentProfile => _config.CurrentProfile;
 
-    /// <summary>扫描/爬虫进行中禁止切游戏：在飞任务持有旧游戏目录，结果会落错游戏</summary>
-    private bool CanSwitchGame() => !IsScanning && SideloaderState != SideloaderUiState.Running;
+    /// <summary>扫描/爬虫进行中或等待应用部分结果时禁止切游戏，避免结果落错数据源</summary>
+    private bool CanSwitchGame() => !IsScanning && SideloaderState != SideloaderUiState.Running
+                                    && _pendingSideloadResult is null;
 
     /// <summary>切换当前游戏（未知 ID 由 GameProfiles.Get 回退 HS2，与配置加载口径一致）</summary>
     [RelayCommand(CanExecute = nameof(CanSwitchGame))]
@@ -299,7 +304,7 @@ public partial class MainWindowViewModel : ObservableObject
             {
                 s.Current.LocalMods = mods;
                 s.Current.ModUsage = mergedUsage;
-                // 去重/整理的数据源缓存：完整条目（含重复）+ 分卡引用 + 时点
+                // 去重/整理/清理的数据源缓存：完整条目（含重复）+ 分卡引用 + 时点
                 s.Current.ModEntries = entries;
                 s.Current.CharaUsage = charaUsage;
                 s.Current.SceneUsage = sceneUsage;
@@ -325,7 +330,7 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>
     /// 阶段 1：扫描 mods 目录全部 zipmod 并解析 manifest；unusedDir（unusedmods）存在时一并扫描。
     /// 折叠后的 mods/unusedMods 供统计与移回候选（unusedMods 不进 LocalMods）；
-    /// 完整条目列表（含重复 guid，与两字典共享 ModInfo 引用）持久化为去重/整理的缓存数据源。
+    /// 完整条目列表（含重复 guid，与两字典共享 ModInfo 引用）持久化为去重/整理/清理的缓存数据源。
     /// </summary>
     private async Task<(Dictionary<string, ModInfo> Mods, Dictionary<string, ModInfo> UnusedMods, List<ModScanEntry> Entries)> ScanModsAsync(
         string modsDir, string? unusedDir)
@@ -367,7 +372,7 @@ public partial class MainWindowViewModel : ObservableObject
             var target = isUnused ? unusedResult : result;
             var cacheTarget = isUnused ? newCacheUnused : newCacheMods;
             // 跨批合并同 guid：按去重规则裁决取最优（与 ReadZipModBatchAsync 批内口径一致）；
-            // 完整列表逐条留存（重复 guid 不折叠），供去重/整理复用
+            // 完整列表逐条留存（重复 guid 不折叠），供去重/整理/清理复用
             foreach (var (guid, info) in batchEntries)
             {
                 entries.Add(new ModScanEntry { Guid = guid, Info = info });
@@ -627,45 +632,55 @@ public partial class MainWindowViewModel : ObservableObject
                     SideloaderFailedCount = p.Failed;
                 }),
                 known: _sideloadDb.GetKnownMods());
+            SideloaderFoundCount = result.DiscoveredMods;
 
             if (_stopRequested)
             {
                 // 取消后 Run 正常返回部分结果：不更新数据库，回到已停止状态
                 SideloaderState = SideloaderUiState.Stopped;
                 SideloaderMessage = "已停止";
-                SaveScanMeta(new SideloadScanMeta
+                SaveSideloadScanMeta(new SideloadScanMeta
                 {
                     LastScanTime = DateTime.Now,
                     Status = SideloadScanStatus.Stopped,
-                    FoundCount = result.Mods.Count,
+                    FoundCount = result.DiscoveredMods,
                 });
             }
-            else if (result.Mods.Count == 0 || result.HasFailures)
+            else if (result.HasFailures)
             {
-                // A 策略：空结果或有抓取失败时保留旧库不覆盖——部分失败的爬取若全量替换，
-                // 会把旧库中实际存在的条目抹掉（kkec 无内嵌库兜底，清空即真丢失）
+                _pendingSideloadResult = result;
                 SideloaderState = SideloaderUiState.Partial;
-                SideloaderError = result.Mods.Count == 0 && !result.HasFailures
-                    ? "未发现任何 Mod，为避免清空数据库已保留旧数据"
-                    : $"部分失败：{result.FailedPages} 个目录、{result.FailedMods} 个 Mod 抓取失败，已保留旧数据，请重试";
-                SaveScanMeta(new SideloadScanMeta
+                SideloaderError = $"部分失败：{result.FailedPages} 个目录、{result.FailedMods} 个 Mod 获取失败，等待确认";
+                SwitchGameCommand.NotifyCanExecuteChanged();
+                var message = $"本次更新有 {result.FailedPages} 个目录、{result.FailedMods} 个 Mod 获取失败，" +
+                              $"已发现 {result.DiscoveredMods} 个 Mod。\n\n" +
+                              "使用本次结果可能缺少抓取失败的内容，是否仍要更新本地 Sideload 数据？";
+                if (PartialResultConfirmationRequested is { } handler)
+                    handler.Invoke(this, message);
+                else
+                    ConfirmPartialSideloaderResult(false);
+            }
+            else if (result.Mods.Count == 0)
+            {
+                SideloaderState = SideloaderUiState.Partial;
+                SideloaderError = "未发现任何 Mod，为避免清空数据库已保留旧数据";
+                SaveSideloadScanMeta(new SideloadScanMeta
                 {
                     LastScanTime = DateTime.Now,
                     Status = SideloadScanStatus.PartialFailure,
-                    FoundCount = result.Mods.Count,
-                    FailedCount = result.FailedPages + result.FailedMods,
+                    FoundCount = result.DiscoveredMods,
                 });
             }
             else
             {
                 _sideloadDb.Update(result.Mods);
                 SideloaderState = SideloaderUiState.Success;
-                SideloaderMessage = $"已发现 {result.Mods.Count} 个 Mods";
-                SaveScanMeta(new SideloadScanMeta
+                SideloaderMessage = $"已发现 {result.DiscoveredMods} 个 Mods";
+                SaveSideloadScanMeta(new SideloadScanMeta
                 {
                     LastScanTime = DateTime.Now,
                     Status = SideloadScanStatus.Success,
-                    FoundCount = result.Mods.Count,
+                    FoundCount = result.DiscoveredMods,
                 });
             }
         }
@@ -674,7 +689,7 @@ public partial class MainWindowViewModel : ObservableObject
             SideloaderState = SideloaderUiState.Error;
             SideloaderError = ex.Message;
             App.LogException(ex);
-            SaveScanMeta(new SideloadScanMeta
+            SaveSideloadScanMeta(new SideloadScanMeta
             {
                 LastScanTime = DateTime.Now,
                 Status = SideloadScanStatus.Error,
@@ -685,28 +700,81 @@ public partial class MainWindowViewModel : ObservableObject
         {
             _currentSideloader = null;
         }
+    }
 
-        // meta 落盘失败不影响主流程（留痕即可），尤其在异常分支不能再向外抛
-        void SaveScanMeta(SideloadScanMeta meta)
+    /// <summary>应用或丢弃等待确认的部分抓取结果；确认前禁止切换游戏数据源</summary>
+    public void ConfirmPartialSideloaderResult(bool useResult)
+    {
+        if (_pendingSideloadResult is not { } result)
+            return;
+        _pendingSideloadResult = null;
+        var failedCount = result.FailedPages + result.FailedMods;
+        try
         {
-            try
+            if (useResult)
             {
-                _sideloadDb.SaveMeta(meta);
+                _sideloadDb.Update(result.Mods);
+                SideloaderState = SideloaderUiState.Success;
+                SideloaderError = "";
+                SideloaderMessage = $"已使用本次结果：发现 {result.DiscoveredMods} 个 Mods，{failedCount} 处获取失败";
             }
-            catch (Exception metaEx)
+            else
             {
-                App.LogException(new Exception($"Sideload meta save failed: {metaEx.Message}"));
+                SideloaderState = SideloaderUiState.Partial;
+                SideloaderError = $"部分失败：{result.FailedPages} 个目录、{result.FailedMods} 个 Mod 获取失败，已保留旧数据";
             }
+            SaveSideloadScanMeta(new SideloadScanMeta
+            {
+                LastScanTime = DateTime.Now,
+                Status = SideloadScanStatus.PartialFailure,
+                FoundCount = result.DiscoveredMods,
+                FailedCount = failedCount,
+                ResultApplied = useResult,
+            });
+        }
+        catch (Exception ex)
+        {
+            SideloaderState = SideloaderUiState.Error;
+            SideloaderError = $"应用本次结果失败：{ex.Message}";
+            App.LogException(ex);
+            SaveSideloadScanMeta(new SideloadScanMeta
+            {
+                LastScanTime = DateTime.Now,
+                Status = SideloadScanStatus.Error,
+                FoundCount = result.DiscoveredMods,
+                Error = ex.Message,
+            });
+        }
+        finally
+        {
+            SwitchGameCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private void SaveSideloadScanMeta(SideloadScanMeta meta)
+    {
+        try
+        {
+            _sideloadDb.SaveMeta(meta);
+        }
+        catch (Exception metaEx)
+        {
+            App.LogException(new Exception($"Sideload meta save failed: {metaEx.Message}"));
         }
     }
 
     // ==================== 缺失 Mod 批量补全（串行下载 + 进度；对应原版 SideloadInit + ProgressModal） ====================
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasMissingMods))]
+    [NotifyPropertyChangedFor(nameof(HasDownloadableMods))]
     [NotifyPropertyChangedFor(nameof(ShowModsReady))]
     [NotifyPropertyChangedFor(nameof(ComplementButtonText))]
     [NotifyCanExecuteChangedFor(nameof(ComplementMissingModsCommand))]
+    private int _downloadableModCount;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasMissingMods))]
+    [NotifyPropertyChangedFor(nameof(ShowModsReady))]
     private int _missingModCount;
 
     [ObservableProperty]
@@ -719,12 +787,14 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private string _complementCurrentName = "";
 
+    public bool HasDownloadableMods => DownloadableModCount > 0;
+
     public bool HasMissingMods => MissingModCount > 0;
 
-    public string ComplementButtonText => IsComplementing ? "补全中..." : $"补全缺失 {MissingModCount} 个 Mods";
+    public string ComplementButtonText => IsComplementing ? "补全中..." : $"补全可下载 {DownloadableModCount} 个 Mods";
 
-    /// <summary>缺失清单：被引用但本地不存在、且 sideload 库中有的 guid（原版 SideloadInit 的 downloadList）</summary>
-    private List<(string Guid, string Url)> ComputeMissingMods()
+    /// <summary>可下载清单：被引用但本地不存在、且 sideload 库中有的 guid（原版 SideloadInit 的 downloadList）</summary>
+    private List<(string Guid, string Url)> ComputeDownloadableMods()
     {
         var usage = _config.Settings.Current.ModUsage;
         var localMods = _config.Settings.Current.LocalMods;
@@ -735,7 +805,7 @@ public partial class MainWindowViewModel : ObservableObject
             .ToList();
     }
 
-    private bool CanComplement() => IsGamePathValid && HasMissingMods && !IsComplementing;
+    private bool CanComplement() => IsGamePathValid && HasDownloadableMods && !IsComplementing;
 
     [RelayCommand(CanExecute = nameof(CanComplement))]
     private async Task ComplementMissingModsAsync()
@@ -744,7 +814,7 @@ public partial class MainWindowViewModel : ObservableObject
         if (dir is null)
             return;
 
-        var list = ComputeMissingMods();
+        var list = ComputeDownloadableMods();
         if (list.Count == 0)
             return;
 
@@ -818,15 +888,20 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>已有扫描数据（mods 库或被引用记录非空）——未扫描时不显示"所有 Mods 已就绪"</summary>
     public bool HasScanData => ModCount > 0 || UsageCount > 0;
 
-    /// <summary>"所有 Mods 已就绪"文案可见性：有扫描数据且无缺失（避免无数据时误显示）</summary>
-    public bool ShowModsReady => HasScanData && !HasMissingMods;
+    /// <summary>"所有 Mods 已就绪"文案可见性：有扫描数据且可下载与缺失均为 0（避免无数据时误显示）</summary>
+    public bool ShowModsReady => HasScanData && !HasDownloadableMods && !HasMissingMods;
 
     internal void RefreshStats()
     {
-        ModCount = _config.Settings.Current.LocalMods.Count;
-        UsageCount = _config.Settings.Current.ModUsage.Count;
-        TotalRefs = _config.Settings.Current.ModUsage.Values.Sum();
-        MissingModCount = ComputeMissingMods().Count;
+        var settings = _config.Settings.Current;
+        ModCount = settings.LocalMods.Count;
+        UsageCount = settings.ModUsage.Count;
+        TotalRefs = settings.ModUsage.Values.Sum();
+        var db = _sideloadDb.Database;
+        DownloadableModCount = settings.ModUsage.Keys
+            .Count(guid => !settings.LocalMods.ContainsKey(guid) && db.ContainsKey(guid));
+        MissingModCount = settings.ModUsage.Keys
+            .Count(guid => !settings.LocalMods.ContainsKey(guid) && !db.ContainsKey(guid));
         OnPropertyChanged(nameof(HasScanData));
         OnPropertyChanged(nameof(ShowModsReady));
     }

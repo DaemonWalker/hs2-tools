@@ -270,7 +270,7 @@ public class SideloadWindowViewModelTests : IDisposable
     }
 
     [Fact]
-    public void LastScanText_FormatsThreeStatuses()
+    public void LastScanText_FormatsAllStatuses()
     {
         using var config = new ConfigService(_dir);
         var db = new SideloadDatabaseService(config);
@@ -283,6 +283,13 @@ public class SideloadWindowViewModelTests : IDisposable
         // SaveMeta 触发 Changed → Reload 刷新（UiDispatch 在测试环境直跑）
         db.SaveMeta(new SideloadScanMeta { LastScanTime = time, Status = SideloadScanStatus.Stopped, FoundCount = 45 });
         Assert.Equal("上次扫描：2025-03-04 05:06（已停止，已发现 45 个）", vm.LastScanText);
+
+        db.SaveMeta(new SideloadScanMeta
+        {
+            LastScanTime = time, Status = SideloadScanStatus.PartialFailure,
+            FoundCount = 40, FailedCount = 2, ResultApplied = true,
+        });
+        Assert.Equal("上次扫描：2025-03-04 05:06（部分失败 2 处，已使用本轮结果；发现 40 个）", vm.LastScanText);
 
         db.SaveMeta(new SideloadScanMeta { LastScanTime = time, Status = SideloadScanStatus.Error, Error = "网络超时" });
         Assert.Equal("上次扫描：2025-03-04 05:06（异常终止：网络超时）", vm.LastScanText);

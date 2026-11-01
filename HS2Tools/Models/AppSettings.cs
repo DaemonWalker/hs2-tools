@@ -42,7 +42,7 @@ public class GameData
     /// <summary>Mod 使用次数（guid -> count）</summary>
     public Dictionary<string, int> ModUsage { get; set; } = new();
 
-    /// <summary>「开始分析」的完整 zipmod 条目（含重复 guid，覆盖 mods/unusedmods；去重/整理的数据源，不再重扫磁盘）</summary>
+    /// <summary>「开始分析」的完整 zipmod 条目（含重复 guid，覆盖 mods/unusedmods；去重/整理/清理的数据源，不再重扫磁盘）</summary>
     public List<ModScanEntry> ModEntries { get; set; } = new();
 
     /// <summary>人物卡引用统计（guid -> count；ModUsage 是两卡合并口径，整理需分卡区分"仅场景引用"故单独持久化）</summary>
@@ -51,7 +51,7 @@ public class GameData
     /// <summary>场景卡引用统计（guid -> count）</summary>
     public Dictionary<string, int> SceneUsage { get; set; } = new();
 
-    /// <summary>最近一次「开始分析」完成时间（去重/整理确认文案标注缓存时点；null = 从未分析）</summary>
+    /// <summary>最近一次「开始分析」完成时间（去重/整理/清理确认文案标注缓存时点；null = 从未分析）</summary>
     public DateTime? LastAnalysisTime { get; set; }
 }
 

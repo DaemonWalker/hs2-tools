@@ -53,7 +53,7 @@ public class GameProfile
     /// <summary>Sideload 数据源 ID（数据库文件归属）：HS2 独占 "hs2"；KK/KKS 共享 KKEC 库 "kkec"</summary>
     public required string SideloadSourceId { get; init; }
 
-    /// <summary>Sideload 爬取起点 / 下载 URL 拼接 base（爬虫从根递归下钻全部子目录）</summary>
+    /// <summary>Sideload 爬取起点 / 下载 URL 拼接 base（爬虫从根遍历全部子目录）</summary>
     public required string SideloadBaseUrl { get; init; }
 }
 

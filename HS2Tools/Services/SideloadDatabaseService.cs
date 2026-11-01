@@ -1,46 +1,46 @@
 using System.Text.Json;
 using HS2Tools.Models;
+using Microsoft.Data.Sqlite;
 
 namespace HS2Tools.Services;
 
 /// <summary>
 /// Sideload 数据库（guid → 远程相对路径 + 增量指纹 + last-seen），按数据源
-/// （GameProfile.SideloadSourceId）分库：每个数据源一个用户文件 sideload-{sourceId}.json。
-/// KK 与 KKS 共享 KKEC 库故天然落同一文件。
-/// 加载顺序：配置目录下用户更新的文件优先；hs2 无用户文件回退程序集内嵌的 sideload.zip，
-/// kkec 无内嵌库，回退空字典（用户需运行一次爬虫更新）。
-/// 旧版单文件 sideload.json 在构造时迁移为 hs2 数据源的库；
-/// 旧版 v1 格式（guid → url 平铺字典）加载时自动升级为 v2（指纹置空、LastSeen 置当前时间）。
+/// （GameProfile.SideloadSourceId）分库：同一 analysis-cache.db 内按 source_id 隔离。
+/// KK 与 KKS 共享 KKEC 库故天然使用同一批记录。
+/// hs2 无用户记录时回退程序集内嵌的 sideload.zip，kkec 无内嵌库时回退空字典。
+/// 旧版 JSON（含单文件 sideload.json）首次启动自动迁移到 SQLite，原文件保留为 .migrated 备份。
 ///
-/// 库格式 v2：{ Version, LastFullScan, Entries: { guid: { Url, SizeText, MtimeText, LastSeen } } }。
-/// Update 为合并语义（仅完整成功的扫描才会调用，见 MainWindowViewModel 的 A 策略）：
-/// 本轮见到的条目刷新 LastSeen；连续两次完整扫描未见到的条目才淘汰，单次漏抓不误删。
-///
-/// 注意（对原版的修复）：原版爬虫结果只经 complete 事件发出且前端丢弃，
-/// 前端随后 init() 重读的是内嵌旧库——"更新"实际从不生效。
-/// C# 版爬取完成后把结果落盘到用户文件，更新真实生效。
+/// Update 为合并语义（仅完整成功或用户确认使用的扫描才会调用）：
+/// 本轮见到的条目刷新 LastSeen；连续两次已应用扫描未见到的条目才淘汰，单次漏抓不误删。
 /// </summary>
 public class SideloadDatabaseService
 {
     private readonly ConfigService _config;
+    private readonly string _dbPath;
+    private readonly bool _storageAvailable;
     private readonly object _sync = new();
     private readonly Dictionary<string, Dictionary<string, SideloadEntry>> _entries = new();
     private readonly Dictionary<string, IReadOnlyDictionary<string, string>> _projection = new();
     private readonly Dictionary<string, DateTime?> _lastFullScan = new();
+    private readonly Dictionary<string, SideloadScanMeta?> _metaCache = new();
 
-    /// <summary>当前缓存来自内嵌/空回退（无用户文件）：首次 Update 从空开始覆盖种子库，不做合并</summary>
+    /// <summary>当前缓存来自内嵌/空回退（无用户记录）：首次 Update 从空开始覆盖种子库，不做合并</summary>
     private readonly Dictionary<string, bool> _fromBundled = new();
     private string _currentSourceId;
 
     public SideloadDatabaseService(ConfigService config)
     {
         _config = config;
-        MigrateLegacyFile();
+        _dbPath = Path.Combine(config.ConfigDir, "analysis-cache.db");
+        _storageAvailable = InitializeStorage();
+        if (_storageAvailable)
+            MigrateJsonFiles();
         _currentSourceId = CurrentSourceId;
         _config.Changed += OnConfigChanged; // 与服务同寿，永久订阅
     }
 
-    /// <summary>当前游戏数据源的数据库（guid → 相对路径投影，消费方与 v1 一致）</summary>
+    /// <summary>当前游戏数据源的数据库（guid → 相对路径投影）</summary>
     public IReadOnlyDictionary<string, string> Database => GetProjection(CurrentSourceId);
 
     /// <summary>数据库被替换（爬虫更新完成 / 切换游戏切到另一数据源）时触发，在调用方的线程上</summary>
@@ -51,17 +51,65 @@ public class SideloadDatabaseService
 
     private string CurrentSourceId => _config.CurrentProfile.SideloadSourceId;
 
-    private string FilePathFor(string sourceId) =>
+    private string LegacyJsonPathFor(string sourceId) =>
         Path.Combine(_config.ConfigDir, $"sideload-{sourceId}.json");
 
-    private string MetaPathFor(string sourceId) =>
+    private string LegacyMetaPathFor(string sourceId) =>
         Path.Combine(_config.ConfigDir, $"sideload-{sourceId}.meta.json");
 
-    // ---- 扫描元数据（爬虫最近一次结果，独立 meta 文件）----
+    private SqliteConnection OpenConnection()
+    {
+        var connection = new SqliteConnection($"Data Source={_dbPath}");
+        connection.Open();
+        return connection;
+    }
 
-    private readonly Dictionary<string, SideloadScanMeta?> _metaCache = new();
+    private bool InitializeStorage()
+    {
+        try
+        {
+            Directory.CreateDirectory(_config.ConfigDir);
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;";
+            command.ExecuteNonQuery();
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS sideload_sources (
+                    source_id TEXT PRIMARY KEY,
+                    last_full_scan_ticks INTEGER NULL
+                );
+                CREATE TABLE IF NOT EXISTS sideload_entries (
+                    source_id TEXT NOT NULL,
+                    guid TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    size_text TEXT NULL,
+                    mtime_text TEXT NULL,
+                    last_seen_ticks INTEGER NOT NULL,
+                    PRIMARY KEY (source_id, guid)
+                );
+                CREATE TABLE IF NOT EXISTS sideload_scan_meta (
+                    source_id TEXT PRIMARY KEY,
+                    last_scan_time_ticks INTEGER NOT NULL,
+                    status INTEGER NOT NULL,
+                    found_count INTEGER NOT NULL,
+                    failed_count INTEGER NOT NULL,
+                    error TEXT NULL,
+                    result_applied INTEGER NOT NULL DEFAULT 0
+                );
+                """;
+            command.ExecuteNonQuery();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"Sideload SQLite 初始化失败，本次运行只能读取旧 JSON 或内嵌库: {ex.Message}");
+            return false;
+        }
+    }
 
-    /// <summary>当前数据源的最近扫描元数据；从未扫描 / 文件损坏 → null（损坏留 ErrorLog）</summary>
+    // ---- 扫描元数据 ----
+
+    /// <summary>当前数据源的最近扫描元数据；从未扫描 / 记录损坏 → null（损坏留 ErrorLog）</summary>
     public SideloadScanMeta? GetMeta() => GetMetaFor(CurrentSourceId);
 
     private SideloadScanMeta? GetMetaFor(string sourceId)
@@ -81,37 +129,70 @@ public class SideloadDatabaseService
     {
         try
         {
-            var path = MetaPathFor(sourceId);
-            if (!File.Exists(path))
-                return null; // 从未扫描：正常情况不留痕
-            return JsonSerializer.Deserialize<SideloadScanMeta>(File.ReadAllText(path));
+            if (_storageAvailable)
+            {
+                using var connection = OpenConnection();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT last_scan_time_ticks, status, found_count, failed_count, error, result_applied
+                    FROM sideload_scan_meta WHERE source_id=$sourceId;
+                    """;
+                command.Parameters.AddWithValue("$sourceId", sourceId);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return null;
+                return new SideloadScanMeta
+                {
+                    LastScanTime = new DateTime(reader.GetInt64(0)),
+                    Status = (SideloadScanStatus)reader.GetInt32(1),
+                    FoundCount = reader.GetInt32(2),
+                    FailedCount = reader.GetInt32(3),
+                    Error = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    ResultApplied = reader.GetInt64(5) != 0,
+                };
+            }
+
+            var path = LegacyMetaPathFor(sourceId);
+            return File.Exists(path)
+                ? JsonSerializer.Deserialize<SideloadScanMeta>(File.ReadAllText(path))
+                : null;
         }
         catch (Exception ex)
         {
-            // 文件损坏视为无记录（与库文件损坏回退语义一致），留痕
             ErrorLog.Log(ex);
             return null;
         }
     }
 
-    /// <summary>写当前数据源的扫描元数据并落盘，随 MetaChanged 事件通知（不触发整表重建）</summary>
+    /// <summary>写当前数据源的扫描元数据，随 MetaChanged 事件通知（不触发整表重建）</summary>
     public void SaveMeta(SideloadScanMeta meta)
     {
+        if (!_storageAvailable)
+            throw new InvalidOperationException("Sideload SQLite 存储不可用");
         lock (_sync)
         {
             var sourceId = CurrentSourceId;
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO sideload_scan_meta
+                    (source_id, last_scan_time_ticks, status, found_count, failed_count, error, result_applied)
+                VALUES ($sourceId, $time, $status, $found, $failed, $error, $applied)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    last_scan_time_ticks=$time, status=$status, found_count=$found,
+                    failed_count=$failed, error=$error, result_applied=$applied;
+                """;
+            command.Parameters.AddWithValue("$sourceId", sourceId);
+            command.Parameters.AddWithValue("$time", meta.LastScanTime.Ticks);
+            command.Parameters.AddWithValue("$status", (int)meta.Status);
+            command.Parameters.AddWithValue("$found", meta.FoundCount);
+            command.Parameters.AddWithValue("$failed", meta.FailedCount);
+            command.Parameters.AddWithValue("$error", (object?)meta.Error ?? DBNull.Value);
+            command.Parameters.AddWithValue("$applied", meta.ResultApplied ? 1 : 0);
+            command.ExecuteNonQuery();
             _metaCache[sourceId] = meta;
-            WriteAllTextAtomic(MetaPathFor(sourceId), JsonSerializer.Serialize(meta));
         }
         MetaChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>同目录临时文件 + 原子替换：防止写一半崩溃/断电留下截断 JSON（旧库一并损坏）</summary>
-    private static void WriteAllTextAtomic(string path, string content)
-    {
-        var tmp = path + ".tmp";
-        File.WriteAllText(tmp, content);
-        File.Move(tmp, path, overwrite: true);
     }
 
     /// <summary>切换游戏时若数据源 ID 变化：取新数据源缓存（懒加载）并通知 UI 刷新</summary>
@@ -128,7 +209,7 @@ public class SideloadDatabaseService
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    // ---- 库条目（v2）----
+    // ---- 库条目 ----
 
     /// <summary>当前数据源旧库按相对路径索引（增量爬取输入）</summary>
     public IReadOnlyDictionary<string, KnownSideloadMod> GetKnownMods()
@@ -179,58 +260,71 @@ public class SideloadDatabaseService
         return result;
     }
 
-    /// <summary>库文件 v2 结构</summary>
-    private sealed class DatabaseFile
-    {
-        public int Version { get; set; } = 2;
-        public DateTime? LastFullScan { get; set; }
-        public Dictionary<string, SideloadEntry> Entries { get; set; } = new();
-    }
-
     private Dictionary<string, SideloadEntry> Load(string sourceId, out DateTime? lastFullScan, out bool fromBundled)
     {
         lastFullScan = null;
         fromBundled = false;
         try
         {
-            var filePath = FilePathFor(sourceId);
-            if (File.Exists(filePath))
+            if (_storageAvailable)
             {
-                var json = File.ReadAllText(filePath);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.ValueKind == JsonValueKind.Object
-                    && doc.RootElement.TryGetProperty("Entries", out _))
-                {
-                    var file = JsonSerializer.Deserialize<DatabaseFile>(json);
-                    if (file is { Entries.Count: > 0 })
-                    {
-                        lastFullScan = file.LastFullScan;
-                        return NormalizeEntries(file.Entries);
-                    }
-                }
-                else
-                {
-                    // v1 平铺字典（guid → url）：升级为 v2，指纹置空（下轮扫描补）、LastSeen 置当前
-                    var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                    if (legacy is { Count: > 0 })
-                        return FromFlatDictionary(legacy);
-                }
+                using var connection = OpenConnection();
+                if (TryGetLastFullScan(connection, sourceId, out lastFullScan))
+                    return ReadEntries(connection, sourceId);
+            }
+            else if (TryReadLegacyDatabase(sourceId, out var legacyEntries, out lastFullScan))
+            {
+                return legacyEntries;
             }
         }
         catch (Exception ex)
         {
-            // 文件损坏回退内嵌库（与 ConfigService 损坏回退语义一致），留痕
             ErrorLog.Log(ex);
         }
 
         fromBundled = true;
         var bundled = SideloaderService.LoadBundledDatabase(sourceId);
-        if (bundled.Count == 0 && sourceId != Models.GameProfiles.Hs2.SideloadSourceId)
+        if (bundled.Count == 0 && sourceId != GameProfiles.Hs2.SideloadSourceId)
         {
-            // kkec 等非 hs2 数据源无内嵌库：回退空字典并说明，用户需先运行爬虫更新
             ErrorLog.Log($"sideload 数据源 {sourceId} 无用户库且无内嵌库，返回空数据库（需先运行爬虫更新）");
         }
         return FromFlatDictionary(bundled);
+    }
+
+    private static Dictionary<string, SideloadEntry> ReadEntries(
+        SqliteConnection connection, string sourceId, SqliteTransaction? transaction = null)
+    {
+        var entries = new Dictionary<string, SideloadEntry>();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT guid, url, size_text, mtime_text, last_seen_ticks
+            FROM sideload_entries WHERE source_id=$sourceId;
+            """;
+        command.Parameters.AddWithValue("$sourceId", sourceId);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            entries[ScannerService.NormalizeGuid(reader.GetString(0))] = new SideloadEntry
+            {
+                Url = reader.GetString(1),
+                SizeText = reader.IsDBNull(2) ? null : reader.GetString(2),
+                MtimeText = reader.IsDBNull(3) ? null : reader.GetString(3),
+                LastSeen = new DateTime(reader.GetInt64(4)),
+            };
+        }
+        return entries;
+    }
+
+    private static bool TryGetLastFullScan(
+        SqliteConnection connection, string sourceId, out DateTime? lastFullScan)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT last_full_scan_ticks FROM sideload_sources WHERE source_id=$sourceId;";
+        command.Parameters.AddWithValue("$sourceId", sourceId);
+        var value = command.ExecuteScalar();
+        lastFullScan = value is null or DBNull ? null : new DateTime((long)value);
+        return value is not null;
     }
 
     private static Dictionary<string, SideloadEntry> FromFlatDictionary(Dictionary<string, string> flat)
@@ -250,44 +344,24 @@ public class SideloadDatabaseService
         return result;
     }
 
-    /// <summary>
-    /// 旧版单文件迁移：sideload.json → sideload-hs2.json（旧库本就是 HS2 的库）。
-    /// 迁移成功与失败都留 ErrorLog 痕迹；失败不抛异常（下次启动重试，旧文件仍在）。
-    /// </summary>
-    private void MigrateLegacyFile()
-    {
-        var legacyPath = Path.Combine(_config.ConfigDir, "sideload.json");
-        var hs2Path = FilePathFor(Models.GameProfiles.Hs2.SideloadSourceId);
-        try
-        {
-            if (!File.Exists(legacyPath) || File.Exists(hs2Path))
-                return;
-            File.Move(legacyPath, hs2Path);
-            ErrorLog.Log($"旧版 sideload.json 已迁移为 {Path.GetFileName(hs2Path)}");
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Log(ex);
-        }
-    }
-
     /// <summary>平铺字典（guid → url）合并更新：指纹置空，下轮扫描补齐（兼容旧调用与测试）</summary>
     public void Update(IDictionary<string, string> database) =>
         Update(database.ToDictionary(kv => kv.Key, kv => new SideloadEntry { Url = kv.Value }));
 
     /// <summary>
-    /// 用完整成功的扫描结果合并更新当前数据源并立即落盘（调用方保证：空结果/有失败不调用——A 策略）。
-    /// 本轮见到的条目刷新 LastSeen 并覆盖；连续两次完整扫描未见到的条目才淘汰。
+    /// 用完整成功或用户确认使用的扫描结果合并更新当前数据源并立即落盘。
+    /// 本轮见到的条目刷新 LastSeen；连续两次已应用扫描未见到的条目才淘汰。
     /// </summary>
     public void Update(IDictionary<string, SideloadEntry> scanned)
     {
+        if (!_storageAvailable)
+            throw new InvalidOperationException("Sideload SQLite 存储不可用");
         lock (_sync)
         {
             var sourceId = CurrentSourceId;
             var entries = GetEntries(sourceId);
             var now = DateTime.Now;
 
-            // 当前库来自内嵌/空回退（首次用户更新）：从空开始覆盖种子库，不把过时内嵌条目并进来
             if (_fromBundled.TryGetValue(sourceId, out var fromBundled) && fromBundled)
             {
                 entries = new Dictionary<string, SideloadEntry>();
@@ -307,7 +381,6 @@ public class SideloadDatabaseService
                 };
             }
 
-            // 淘汰：仅当有上一轮完整扫描基准时进行；上轮之前就未见的条目本轮仍未见 → 连续两轮淘汰
             var previousFullScan = _lastFullScan.TryGetValue(sourceId, out var t) ? t : null;
             if (previousFullScan != null)
             {
@@ -318,11 +391,188 @@ public class SideloadDatabaseService
                 }
             }
 
+            PersistSnapshot(sourceId, entries, now);
             _lastFullScan[sourceId] = now;
             _projection[sourceId] = Project(entries);
-            WriteAllTextAtomic(FilePathFor(sourceId), JsonSerializer.Serialize(
-                new DatabaseFile { LastFullScan = now, Entries = entries }));
         }
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void PersistSnapshot(
+        string sourceId, Dictionary<string, SideloadEntry> entries, DateTime? lastFullScan)
+    {
+        using var connection = OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM sideload_entries WHERE source_id=$sourceId;";
+            delete.Parameters.AddWithValue("$sourceId", sourceId);
+            delete.ExecuteNonQuery();
+        }
+        foreach (var (guid, entry) in entries)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO sideload_entries
+                    (source_id, guid, url, size_text, mtime_text, last_seen_ticks)
+                VALUES ($sourceId, $guid, $url, $size, $mtime, $lastSeen);
+                """;
+            command.Parameters.AddWithValue("$sourceId", sourceId);
+            command.Parameters.AddWithValue("$guid", guid);
+            command.Parameters.AddWithValue("$url", entry.Url);
+            command.Parameters.AddWithValue("$size", (object?)entry.SizeText ?? DBNull.Value);
+            command.Parameters.AddWithValue("$mtime", (object?)entry.MtimeText ?? DBNull.Value);
+            command.Parameters.AddWithValue("$lastSeen", entry.LastSeen.Ticks);
+            command.ExecuteNonQuery();
+        }
+        using (var source = connection.CreateCommand())
+        {
+            source.Transaction = transaction;
+            source.CommandText = """
+                INSERT INTO sideload_sources (source_id, last_full_scan_ticks) VALUES ($sourceId, $time)
+                ON CONFLICT(source_id) DO UPDATE SET last_full_scan_ticks=$time;
+                """;
+            source.Parameters.AddWithValue("$sourceId", sourceId);
+            source.Parameters.AddWithValue("$time", (object?)lastFullScan?.Ticks ?? DBNull.Value);
+            source.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    // ---- 旧 JSON 迁移与 SQLite 不可用时的只读回退 ----
+
+    private sealed class DatabaseFile
+    {
+        public int Version { get; set; } = 2;
+        public DateTime? LastFullScan { get; set; }
+        public Dictionary<string, SideloadEntry> Entries { get; set; } = new();
+    }
+
+    private void MigrateJsonFiles()
+    {
+        foreach (var sourceId in GameProfiles.All.Select(p => p.SideloadSourceId).Distinct(StringComparer.Ordinal))
+        {
+            var jsonPath = LegacyJsonPathFor(sourceId);
+            if (!File.Exists(jsonPath) && sourceId == GameProfiles.Hs2.SideloadSourceId)
+                jsonPath = Path.Combine(_config.ConfigDir, "sideload.json");
+            MigrateDatabaseJson(sourceId, jsonPath);
+            MigrateMetaJson(sourceId, LegacyMetaPathFor(sourceId));
+        }
+    }
+
+    private void MigrateDatabaseJson(string sourceId, string path)
+    {
+        if (!File.Exists(path) || HasSource(sourceId))
+            return;
+        try
+        {
+            if (!TryReadDatabaseJson(path, out var entries, out var lastFullScan))
+                return;
+            PersistSnapshot(sourceId, entries, lastFullScan);
+            MarkMigrated(path);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"迁移 Sideload JSON 失败（{path}）: {ex.Message}");
+        }
+    }
+
+    private void MigrateMetaJson(string sourceId, string path)
+    {
+        if (!File.Exists(path) || HasMeta(sourceId))
+            return;
+        try
+        {
+            var meta = JsonSerializer.Deserialize<SideloadScanMeta>(File.ReadAllText(path));
+            if (meta is null)
+                return;
+            SaveMetaFor(sourceId, meta);
+            MarkMigrated(path);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"迁移 Sideload 扫描元数据失败（{path}）: {ex.Message}");
+        }
+    }
+
+    private bool HasSource(string sourceId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sideload_sources WHERE source_id=$sourceId;";
+        command.Parameters.AddWithValue("$sourceId", sourceId);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private bool HasMeta(string sourceId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sideload_scan_meta WHERE source_id=$sourceId;";
+        command.Parameters.AddWithValue("$sourceId", sourceId);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private void SaveMetaFor(string sourceId, SideloadScanMeta meta)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO sideload_scan_meta
+                (source_id, last_scan_time_ticks, status, found_count, failed_count, error, result_applied)
+            VALUES ($sourceId, $time, $status, $found, $failed, $error, $applied);
+            """;
+        command.Parameters.AddWithValue("$sourceId", sourceId);
+        command.Parameters.AddWithValue("$time", meta.LastScanTime.Ticks);
+        command.Parameters.AddWithValue("$status", (int)meta.Status);
+        command.Parameters.AddWithValue("$found", meta.FoundCount);
+        command.Parameters.AddWithValue("$failed", meta.FailedCount);
+        command.Parameters.AddWithValue("$error", (object?)meta.Error ?? DBNull.Value);
+        command.Parameters.AddWithValue("$applied", meta.ResultApplied ? 1 : 0);
+        command.ExecuteNonQuery();
+    }
+
+    private static void MarkMigrated(string path)
+    {
+        var backup = path + ".migrated";
+        if (!File.Exists(backup))
+            File.Move(path, backup);
+    }
+
+    private bool TryReadLegacyDatabase(
+        string sourceId, out Dictionary<string, SideloadEntry> entries, out DateTime? lastFullScan)
+    {
+        var path = LegacyJsonPathFor(sourceId);
+        if (!File.Exists(path) && sourceId == GameProfiles.Hs2.SideloadSourceId)
+            path = Path.Combine(_config.ConfigDir, "sideload.json");
+        return TryReadDatabaseJson(path, out entries, out lastFullScan);
+    }
+
+    private static bool TryReadDatabaseJson(
+        string path, out Dictionary<string, SideloadEntry> entries, out DateTime? lastFullScan)
+    {
+        entries = new();
+        lastFullScan = null;
+        if (!File.Exists(path))
+            return false;
+        var json = File.ReadAllText(path);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind == JsonValueKind.Object
+            && doc.RootElement.TryGetProperty("Entries", out _))
+        {
+            var file = JsonSerializer.Deserialize<DatabaseFile>(json);
+            if (file is null)
+                return false;
+            entries = NormalizeEntries(file.Entries);
+            lastFullScan = file.LastFullScan;
+            return true;
+        }
+        var legacy = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+        if (legacy is null)
+            return false;
+        entries = FromFlatDictionary(legacy);
+        return true;
     }
 }

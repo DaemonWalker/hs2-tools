@@ -52,7 +52,7 @@
                 </Grid>
             </Border>
 
-            <UniformGrid Columns="4" Margin="0,16,0,0">
+            <UniformGrid Columns="5" Margin="0,16,0,0">
                 <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
                     <StackPanel>
                         <TextBlock Text="本地 Mods" Style="{StaticResource StatTitle}"/>
@@ -87,11 +87,18 @@
                         <TextBlock Text="{Binding TotalRefs, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"/>
                     </StackPanel>
                 </Border>
+                <Border Style="{StaticResource StatCard}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="可下载 Mods" Style="{StaticResource StatTitle}"/>
+                        <TextBlock Text="{Binding DownloadableModCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
+                                   Foreground="{DynamicResource WarningBrush}"/>
+                    </StackPanel>
+                </Border>
                 <Border Style="{StaticResource StatCard}">
                     <StackPanel>
                         <TextBlock Text="缺失 Mods" Style="{StaticResource StatTitle}"/>
                         <TextBlock Text="{Binding MissingModCount, StringFormat={}{0:N0}}" Style="{StaticResource StatValue}"
-                                   Foreground="{DynamicResource WarningBrush}"/>
+                                   Foreground="{DynamicResource ErrorBrush}"/>
                     </StackPanel>
                 </Border>
             </UniformGrid>
@@ -215,11 +222,20 @@
                         <TextBlock Text="缺失依赖补全" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="自动下载角色与场景引用、但本地尚未安装的 Mods"
                                    Style="{StaticResource HintText}" Margin="0,4,0,14"/>
-                        <TextBlock Text="所有 Mods 已就绪，当前没有需要补全的依赖" Foreground="{DynamicResource SuccessBrush}" TextWrapping="Wrap">
+                        <TextBlock Text="所有 Mods 已就绪，当前没有缺失依赖" Foreground="{DynamicResource SuccessBrush}" TextWrapping="Wrap">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers><DataTrigger Binding="{Binding ShowModsReady}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Text="{Binding MissingModCount, StringFormat='有 {0} 个缺失 Mods 不在当前 Sideload 数据库中，无法自动下载'}"
+                                   Foreground="{DynamicResource ErrorBrush}" TextWrapping="Wrap" Margin="0,0,0,10">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers><DataTrigger Binding="{Binding HasMissingMods}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
@@ -228,7 +244,7 @@
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                                     <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers><DataTrigger Binding="{Binding HasMissingMods}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                    <Style.Triggers><DataTrigger Binding="{Binding HasDownloadableMods}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
                                 </Style>
                             </Button.Style>
                         </Button>

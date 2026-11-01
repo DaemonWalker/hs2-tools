@@ -33,6 +33,16 @@ public partial class ModsView : UserControl
         vm.DedupMessageRequested += (_, msg) =>
             MessageBox.Show(owner, msg, "Mod 去重", MessageBoxButton.OK, MessageBoxImage.Information);
 
+        vm.CleanupConfirmationRequested += (_, msg) =>
+        {
+            var result = MessageBox.Show(owner, msg,
+                "确认永久删除？", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result == MessageBoxResult.Yes)
+                _ = vm.ConfirmCleanupAsync();
+        };
+        vm.CleanupMessageRequested += (_, msg) =>
+            MessageBox.Show(owner, msg, "清理 Mods", MessageBoxButton.OK, MessageBoxImage.Information);
+
         vm.OrganizeConfirmationRequested += (_, msg) =>
         {
             var result = MessageBox.Show(owner, msg,

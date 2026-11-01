@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Threading.Channels;
 using HS2Tools.Models;
 using HtmlAgilityPack;
 
@@ -12,7 +14,8 @@ namespace HS2Tools.Services;
 /// Sideload 爬虫（Go internal/sideloader 移植，含更新可靠性/性能修复）。
 /// 爬取 BetterRepack autoindex 目录列表，对每个远程 zipmod 只发 1~7 次 HTTP Range 小请求提取 GUID
 /// （suffix range 首请求省 HEAD、尾部窗口几何扩窗、本地头+manifest 合并请求）。
-/// 爬虫从起始 URL 递归下钻全部子目录（ParseLinks 分流目录/mod，目录级全局并发 3），
+/// 爬虫从起始 URL 遍历全部子目录（ParseLinks 分流目录/mod），
+/// 单目录生产者 + Channel + 10 个异步 Mod 消费者，避免递归并发调度的父子任务死锁。
 /// 因此 KKEC 根目录（其下是多个 "Sideloader Modpack*" 子目录）与 AISHS2 用同一套逻辑即可覆盖，
 /// 各游戏仅起点 baseUrl 不同（见 GameProfiles.*.SideloadBaseUrl，唯一事实来源）。
 /// Run 可重入（每次运行新建内部状态）；Cancel 置标志位 + CancellationToken（在飞请求即时中断）。
@@ -42,23 +45,20 @@ public class SideloaderService : ISideloaderService
         public readonly CancellationTokenSource Cts = new();
         public readonly Dictionary<string, SideloadEntry> Result = new();
         public readonly object ResultLock = new();
-        public readonly SemaphoreSlim ModSem = new(10);
 
-        /// <summary>旧库条目（按相对路径索引）：路径+大小+时间未变的 Mod 零请求复用</summary>
+        /// <summary>旧库条目（按相对路径索引）：Last modified 未变新的 Mod 零请求复用</summary>
         public IReadOnlyDictionary<string, KnownSideloadMod>? Known;
 
-        /// <summary>目录级并发必须全局唯一：此前每层递归各建一个 SemaphoreSlim(3)，
-        /// 实际并发随深度相乘（3^深度），与"目录级并发 3"不符且易触发服务端连接重置。</summary>
-        public readonly SemaphoreSlim DirSem = new(3);
         public Action<string>? Log;
 
-        // 失败/跳过计数（多线程 Interlocked）：供 A 策略判断本轮是否可覆盖旧库
+        // 失败/跳过计数（多线程 Interlocked）：供调用方提示并确认是否应用部分结果
         public int FailedPages;
         public int FailedMods;
         public int SkippedNoGuid;
         public int SkippedTooLarge;
         public int NotFoundMods;
         public int ReusedMods;
+        public int Discovered;
         public int Processed;
     }
 
@@ -90,7 +90,7 @@ public class SideloaderService : ISideloaderService
         get { lock (_runLock) return _currentRun != null; }
     }
 
-    /// <summary>取消爬取：置标志位 + 取消 CancellationToken（在飞请求与信号量等待即时中断）</summary>
+    /// <summary>取消爬取：置标志位 + 取消 CancellationToken（在飞请求与 Channel 等待即时中断）</summary>
     public void Cancel()
     {
         RunState? run;
@@ -104,7 +104,7 @@ public class SideloaderService : ISideloaderService
     }
 
     /// <summary>运行爬取。已在运行时抛 InvalidOperationException（对应原版 "sideloader is already running"）。
-    /// known 为旧库条目（按相对路径索引）：路径+大小+时间未变的 Mod 零请求复用（增量爬取）。</summary>
+    /// known 为旧库条目（按相对路径索引）：Last modified 未变新的 Mod 零请求复用（增量爬取）。</summary>
     public async Task<SideloadRunResult> RunAsync(
         Action<string>? onLog = null, IProgress<SideloaderProgress>? onProgress = null,
         IReadOnlyDictionary<string, KnownSideloadMod>? known = null)
@@ -129,12 +129,12 @@ public class SideloaderService : ISideloaderService
             }
             catch (OperationCanceledException) when (run.Cancelled)
             {
-                // 用户停止：信号量等待/请求被 CT 中断，走正常返回（部分结果由调用方决定丢弃）
+                // 用户停止：Channel 等待/请求被 CT 中断，走正常返回（部分结果由调用方决定丢弃）
             }
             int count;
             lock (run.ResultLock)
                 count = run.Result.Count;
-            onLog?.Invoke($"Crawl completed, found {count} mods");
+            onLog?.Invoke($"Crawl completed, found {run.Discovered} mods ({count} unique GUIDs)");
 
             Dictionary<string, SideloadEntry> mods;
             lock (run.ResultLock)
@@ -142,6 +142,7 @@ public class SideloaderService : ISideloaderService
             return new SideloadRunResult
             {
                 Mods = mods,
+                DiscoveredMods = run.Discovered,
                 ReusedMods = run.ReusedMods,
                 FailedPages = run.FailedPages,
                 FailedMods = run.FailedMods,
@@ -162,49 +163,76 @@ public class SideloaderService : ISideloaderService
 
     private async Task CrawlAsync(string pageUrl, RunState run, Action<string>? onLog, IProgress<SideloaderProgress>? onProgress)
     {
-        if (run.Cancelled)
-            return;
+        const int modWorkerCount = 10;
+        var channel = Channel.CreateUnbounded<AutoindexMod>(new UnboundedChannelOptions
+        {
+            SingleWriter = true,
+            SingleReader = false,
+            AllowSynchronousContinuations = false,
+        });
+        var modWorkers = Enumerable.Range(0, modWorkerCount)
+            .Select(_ => ModWorkerAsync())
+            .ToArray();
 
-        onLog?.Invoke($"Processing: {pageUrl}");
-
-        HtmlDocument? doc;
         try
         {
-            doc = await FetchDocAsync(pageUrl, run).ConfigureAwait(false);
+            var pendingDirectories = new Queue<string>();
+            var visitedDirectories = new HashSet<string>(StringComparer.Ordinal);
+            pendingDirectories.Enqueue(pageUrl);
+            visitedDirectories.Add(pageUrl);
+
+            // 单目录生产者串行遍历；子目录只入队，不递归等待，避免父目录与子目录相互等待。
+            while (pendingDirectories.Count > 0)
+            {
+                run.Cts.Token.ThrowIfCancellationRequested();
+                var currentUrl = pendingDirectories.Dequeue();
+                onLog?.Invoke($"Processing: {currentUrl}");
+
+                HtmlDocument? doc;
+                try
+                {
+                    doc = await FetchDocAsync(currentUrl, run).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // 目录失败 = 整棵子树缺失，计数供用户确认是否使用部分结果；继续处理其他目录。
+                    Interlocked.Increment(ref run.FailedPages);
+                    onLog?.Invoke($"Failed to fetch {currentUrl}: {ex.Message}");
+                    continue;
+                }
+
+                var (dirs, mods) = ParseLinks(doc, currentUrl);
+                foreach (var dir in dirs)
+                {
+                    if (visitedDirectories.Add(dir))
+                        pendingDirectories.Enqueue(dir);
+                }
+                foreach (var mod in mods)
+                {
+                    Interlocked.Increment(ref run.Discovered);
+                    await channel.Writer.WriteAsync(mod, run.Cts.Token).ConfigureAwait(false);
+                }
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            // 原版静默返回；迁移约定：至少记日志。目录失败 = 整棵子树缺失，计数供 A 策略保留旧库
-            Interlocked.Increment(ref run.FailedPages);
-            onLog?.Invoke($"Failed to fetch {pageUrl}: {ex.Message}");
-            return;
+            // 异常或取消也必须关闭 Channel，并等待消费者退出，不能遗留后台任务。
+            channel.Writer.TryComplete();
+            await Task.WhenAll(modWorkers).ConfigureAwait(false);
         }
 
-        var (dirs, mods) = ParseLinks(doc, pageUrl);
-
-        // mod 级并发 10
-        var modTasks = new List<Task>();
-        foreach (var mod in mods)
+        async Task ModWorkerAsync()
         {
-            if (run.Cancelled)
-                break;
-            await run.ModSem.WaitAsync(run.Cts.Token).ConfigureAwait(false);
-            modTasks.Add(ProcessModAsync(mod));
+            try
+            {
+                await foreach (var mod in channel.Reader.ReadAllAsync(run.Cts.Token).ConfigureAwait(false))
+                    await ProcessModAsync(mod).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (run.Cancelled)
+            {
+                // 用户停止：目录生产者关闭 Channel 后，所有消费者统一在此退出。
+            }
         }
-        await Task.WhenAll(modTasks).ConfigureAwait(false);
-
-        // 目录级并发 3（全局信号量，见 RunState.DirSem）
-        var dirTasks = new List<Task>();
-        foreach (var dir in dirs)
-        {
-            if (run.Cancelled)
-                break;
-            await run.DirSem.WaitAsync(run.Cts.Token).ConfigureAwait(false);
-            dirTasks.Add(CrawlDirAsync(dir));
-        }
-        await Task.WhenAll(dirTasks).ConfigureAwait(false);
-
-        return;
 
         async Task ProcessModAsync(AutoindexMod mod)
         {
@@ -213,11 +241,10 @@ public class SideloaderService : ISideloaderService
                 : mod.Url;
             try
             {
-                // 增量爬取：路径+大小+时间都未变 → 零请求沿用旧 GUID。
-                // 指纹任一缺失则保守回退正常抓取（退化为全量，不会漏 Mod）
+                // 增量爬取：本地记录的 Last modified 不晚于本站当前时间 → 零请求沿用旧 GUID。
+                // 日期缺失或无法解析时仅在原始指纹完全一致时复用，其余情况保守重抓。
                 if (run.Known != null && run.Known.TryGetValue(relative, out var known)
-                    && known.SizeText != null && known.MtimeText != null
-                    && known.SizeText == mod.SizeText && known.MtimeText == mod.MtimeText)
+                    && CanReuseWithoutFetch(known, mod))
                 {
                     Interlocked.Increment(ref run.ReusedMods);
                     AddResult(known.Guid);
@@ -248,12 +275,9 @@ public class SideloaderService : ISideloaderService
             }
             finally
             {
-                run.ModSem.Release();
                 var processed = Interlocked.Increment(ref run.Processed);
-                int current;
-                lock (run.ResultLock)
-                    current = run.Result.Count;
-                onProgress?.Report(new SideloaderProgress(current, 0, processed, run.FailedPages + run.FailedMods));
+                var discovered = Volatile.Read(ref run.Discovered);
+                onProgress?.Report(new SideloaderProgress(discovered, 0, processed, run.FailedPages + run.FailedMods));
             }
 
             void AddResult(string guid)
@@ -272,18 +296,6 @@ public class SideloaderService : ISideloaderService
                         };
                 }
                 onLog?.Invoke($"Found: {guid}");
-            }
-        }
-
-        async Task CrawlDirAsync(string dirUrl)
-        {
-            try
-            {
-                await CrawlAsync(dirUrl, run, onLog, onProgress).ConfigureAwait(false);
-            }
-            finally
-            {
-                run.DirSem.Release();
             }
         }
     }
@@ -347,7 +359,19 @@ public class SideloaderService : ISideloaderService
         return doc;
     }
 
-    /// <summary>autoindex 列表行中的 zipmod：URL + 大小/修改时间列原文（增量指纹，仅做相等比对）</summary>
+    private static bool CanReuseWithoutFetch(KnownSideloadMod known, AutoindexMod mod)
+    {
+        if (TryParseMtime(known.MtimeText, out var previous) && TryParseMtime(mod.MtimeText, out var current))
+            return previous <= current;
+        return known.SizeText != null && known.MtimeText != null
+               && known.SizeText == mod.SizeText && known.MtimeText == mod.MtimeText;
+    }
+
+    private static bool TryParseMtime(string? text, out DateTime value) =>
+        DateTime.TryParseExact(text, ["yyyy-MM-dd HH:mm", "yyyy-M-d H:mm"],
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
+
+    /// <summary>autoindex 列表行中的 zipmod：URL + 大小/修改时间列原文（增量指纹）</summary>
     internal sealed record AutoindexMod(string Url, string? SizeText, string? MtimeText);
 
     /// <summary>
@@ -415,7 +439,8 @@ public class SideloaderService : ISideloaderService
                     // 解码后直接拼接，# 会被 Uri 当作 fragment 截断：实际请求落到父目录，ParseLinks 又解析出
                     // 同一链接 → 无限递归。拼回 URL 前把 # / ? 转义还原（等价于服务器 href 的原始编码形态）。
                     var url = pageUrl + decoded.Replace("#", "%23").Replace("?", "%3F");
-                    if (hrefSet.Add(url) && url.EndsWith(".zipmod", StringComparison.OrdinalIgnoreCase))
+                    if (hrefSet.Add(url) && url.EndsWith(".zipmod", StringComparison.OrdinalIgnoreCase)
+                        && sizeText != "0")
                         modList.Add(new AutoindexMod(url, sizeText, mtimeText));
                 }
             }

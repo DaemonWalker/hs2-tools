@@ -76,7 +76,7 @@ public class ConfigService : IDisposable
     }
 
     /// <summary>
-    /// 绿色版首次迁移：appDataDir 中的 settings.json 与 sideload*.json 复制到 configDir（已存在则跳过）。
+    /// 绿色版首次迁移：appDataDir 中的 settings.json、analysis-cache.db 与 sideload*.json 复制到 configDir（已存在则跳过）。
     /// configDir 即 %AppData% 回退目录时不迁移。internal 供测试。
     /// </summary>
     internal static void MigrateFromAppData(string configDir, string appDataDir)
@@ -87,7 +87,7 @@ public class ConfigService : IDisposable
         {
             if (!Directory.Exists(appDataDir))
                 return;
-            var names = new List<string> { SettingsFileName };
+            var names = new List<string> { SettingsFileName, "analysis-cache.db" };
             names.AddRange(Directory.GetFiles(appDataDir, "sideload*.json").Select(f => Path.GetFileName(f)!));
             foreach (var name in names)
             {
@@ -107,7 +107,7 @@ public class ConfigService : IDisposable
         }
     }
 
-    /// <summary>配置目录（settings.json 与 sideload.json 所在目录）</summary>
+    /// <summary>配置目录（settings.json 与 analysis-cache.db 所在目录）</summary>
     public string ConfigDir => _configDir;
 
     public string SettingsPath => Path.Combine(_configDir, SettingsFileName);

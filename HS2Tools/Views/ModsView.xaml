@@ -56,6 +56,7 @@
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
                     <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}"/>
                     <Button Content="{Binding DedupButtonText}" Command="{Binding DedupCommand}" Margin="8,0,0,0"/>
+                    <Button Content="{Binding CleanupButtonText}" Command="{Binding CleanupCommand}" Margin="8,0,0,0"/>
                     <Button Content="{Binding OrganizeButtonText}" Command="{Binding OrganizeCommand}"
                             Style="{StaticResource PrimaryButton}" Margin="8,0,0,0"/>
                 </StackPanel>

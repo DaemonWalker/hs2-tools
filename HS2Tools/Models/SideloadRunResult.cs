@@ -2,15 +2,17 @@ namespace HS2Tools.Models;
 
 /// <summary>
 /// 爬虫一次运行的结果与失败统计。
-/// 用于更新保护（A 策略）：空结果或存在抓取失败时保留旧库不覆盖，
-/// 避免部分失败的爬取把旧库条目抹掉（kkec 无内嵌库兜底，清空即真丢失）。
+/// 空结果保留旧库；存在抓取失败时由调用方询问用户是否使用本轮结果。
 /// </summary>
 public sealed class SideloadRunResult
 {
     /// <summary>guid → 库条目（相对路径 + 增量指纹）</summary>
     public required Dictionary<string, SideloadEntry> Mods { get; init; }
 
-    /// <summary>增量爬取复用数（路径+大小+时间未变，零请求沿用旧 GUID）</summary>
+    /// <summary>列表中发现的 Mod 文件数（不含目录；可能大于去重后的 Mods.Count）</summary>
+    public int DiscoveredMods { get; init; }
+
+    /// <summary>增量爬取复用数（本站修改时间未变新，零请求沿用旧 GUID）</summary>
     public int ReusedMods { get; init; }
 
     /// <summary>目录页抓取失败数（该目录整棵子树缺失）</summary>

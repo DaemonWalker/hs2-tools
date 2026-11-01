@@ -157,15 +157,82 @@ public class SideloaderTests : IDisposable
         var result = await svc.RunAsync(logs.Add, new SyncProgress<SideloaderProgress>(progress.Add));
 
         Assert.Equal(2, result.Mods.Count);
+        Assert.Equal(2, result.DiscoveredMods); // 根目录和子目录本身不计入发现数
         Assert.Equal("modA.zipmod", result.Mods["com.test.mod.a"].Url);
         Assert.Equal("subdir/modB.zipmod", result.Mods["com.test.mod.b"].Url);
         Assert.Contains(logs, l => l.Contains("Crawl completed, found 2 mods"));
         Assert.NotEmpty(progress);
+        Assert.All(progress, p => Assert.True(p.Current >= p.Processed));
+        Assert.Equal(2, progress[^1].Current);
+        Assert.Equal(2, progress[^1].Processed);
 
         // 确认确实只发了 Range 小请求而不是整文件下载
         Assert.DoesNotContain(_server.Requests, r => r.Path.EndsWith(".zipmod") && r.Range == null && r.Method == "GET");
         // suffix range 首请求已带总大小（Content-Range）：不再发 HEAD
         Assert.DoesNotContain(_server.Requests, r => r.Method == "HEAD");
+    }
+
+    [Fact]
+    public async Task Crawl_ZeroSizeFile_SkipsWithoutRequest()
+    {
+        var small = File.ReadAllBytes(WriteZipmod(_dir, "valid.zipmod",
+            MakeManifest("com.test.valid"), deflate: false));
+        _server.MapHtml("/", """
+            <table id="indexlist">
+            <tr><th>Name</th><th>Last modified</th><th>Size</th></tr>
+            <tr><td><a href="../">../</a></td><td>-</td><td>-</td></tr>
+            <tr><td><a href="empty.zipmod">empty.zipmod</a></td><td>2024-01-02 03:04</td><td>0</td></tr>
+            <tr><td><a href="valid.zipmod">valid.zipmod</a></td><td>2024-01-02 03:04</td><td>1.0 KB</td></tr>
+            </table>
+            """);
+        _server.MapFile("/valid.zipmod", small);
+
+        var svc = new SideloaderService(baseUrl: _server.BaseUrl);
+        var result = await svc.RunAsync();
+
+        Assert.Single(result.Mods);
+        Assert.Equal(1, result.DiscoveredMods);
+        Assert.Equal(0, result.FailedMods);
+        Assert.DoesNotContain(_server.Requests, r => r.Path == "/empty.zipmod");
+    }
+
+    [Fact]
+    public async Task Crawl_ThreeNestedParents_CompletesWithoutDeadlock()
+    {
+        // 旧递归调度中三个父目录占满 DirSem 后等待子目录，子目录又等待 DirSem，形成死锁。
+        MapDirectory("/", "a/", "b/", "c/");
+        foreach (var dir in new[] { "a", "b", "c" })
+        {
+            var bytes = File.ReadAllBytes(WriteZipmod(_dir, $"{dir}.zipmod",
+                MakeManifest($"com.test.nested.{dir}"), deflate: false));
+            MapDirectory($"/{dir}/", "child/");
+            MapDirectory($"/{dir}/child/", $"{dir}.zipmod");
+            _server.MapFile($"/{dir}/child/{dir}.zipmod", bytes);
+        }
+
+        var svc = new SideloaderService(baseUrl: _server.BaseUrl);
+        var run = svc.RunAsync();
+        var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(5)));
+        if (finished != run)
+        {
+            svc.Cancel();
+            await run;
+        }
+
+        Assert.Same(run, finished);
+        var result = await run;
+        Assert.Equal(3, result.Mods.Count);
+        Assert.Equal("a/child/a.zipmod", result.Mods["com.test.nested.a"].Url);
+        Assert.Equal("b/child/b.zipmod", result.Mods["com.test.nested.b"].Url);
+        Assert.Equal("c/child/c.zipmod", result.Mods["com.test.nested.c"].Url);
+
+        void MapDirectory(string path, params string[] entries) => _server.MapHtml(path, $"""
+            <table id="indexlist">
+            <tr><th>Name</th></tr>
+            <tr><td><a href="../">../</a></td></tr>
+            {string.Join("\n", entries.Select(entry => $"<tr><td><a href=\"{entry}\">{entry}</a></td></tr>"))}
+            </table>
+            """);
     }
 
     [Fact]
@@ -327,12 +394,29 @@ public class SideloaderTests : IDisposable
         Assert.Equal("modA.zipmod", second.Mods["com.test.mod.a"].Url);
         Assert.Equal(zipRequestsBefore, _server.Requests.Count(r => r.Path.EndsWith(".zipmod")));
 
-        // 指纹变化（大小列变了）→ 回退为正常抓取
+        // 仅大小列变化、Last modified 未变新：仍按日期跳过，不再请求文件
         var third = await svc.RunAsync(known: new Dictionary<string, KnownSideloadMod>
         {
             ["modA.zipmod"] = new("com.test.mod.a", "2.0 KB", entry.MtimeText),
         });
-        Assert.Equal(0, third.ReusedMods);
+        Assert.Equal(1, third.ReusedMods);
+        Assert.Equal(zipRequestsBefore, _server.Requests.Count(r => r.Path.EndsWith(".zipmod")));
+
+        // 本地日期早于本站日期同样属于"不晚于"：跳过，不请求文件
+        var fourth = await svc.RunAsync(known: new Dictionary<string, KnownSideloadMod>
+        {
+            ["modA.zipmod"] = new("com.test.mod.a", entry.SizeText, "2024-01-01 03:04"),
+        });
+        Assert.Equal(1, fourth.ReusedMods);
+        Assert.Equal(zipRequestsBefore, _server.Requests.Count(r => r.Path.EndsWith(".zipmod")));
+
+        // 本地日期晚于本站日期（例如远端回滚）：保守重抓
+        zipRequestsBefore = _server.Requests.Count(r => r.Path.EndsWith(".zipmod"));
+        var fifth = await svc.RunAsync(known: new Dictionary<string, KnownSideloadMod>
+        {
+            ["modA.zipmod"] = new("com.test.mod.a", entry.SizeText, "2024-01-03 03:04"),
+        });
+        Assert.Equal(0, fifth.ReusedMods);
         Assert.True(_server.Requests.Count(r => r.Path.EndsWith(".zipmod")) > zipRequestsBefore);
     }
 

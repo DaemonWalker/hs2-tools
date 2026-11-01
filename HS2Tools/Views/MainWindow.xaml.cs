@@ -43,6 +43,13 @@ public partial class MainWindow : Window
                 vm.ConfirmStopSideloader();
         };
 
+        vm.PartialResultConfirmationRequested += (_, msg) =>
+        {
+            var result = MessageBox.Show(this, msg,
+                "使用部分抓取的 Sideload 结果？", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            vm.ConfirmPartialSideloaderResult(result == MessageBoxResult.Yes);
+        };
+
         vm.MoveBackConfirmationRequested += async (_, msg) =>
         {
             var result = MessageBox.Show(this, msg,

@@ -12,13 +12,13 @@ public enum SideloadScanStatus
     /// <summary>异常终止</summary>
     Error,
 
-    /// <summary>部分失败（空结果或存在抓取失败）：已保留旧库不覆盖</summary>
+    /// <summary>部分失败（空结果或存在抓取失败）：是否应用本轮结果见 ResultApplied</summary>
     PartialFailure,
 }
 
 /// <summary>
 /// Sideload 数据源最近一次爬虫扫描的元数据，
-/// 独立文件 sideload-{sourceId}.meta.json 持久化（与库文件同目录同命名风格）。
+/// 持久化在 analysis-cache.db 的 sideload_scan_meta 表。
 /// </summary>
 public class SideloadScanMeta
 {
@@ -32,6 +32,9 @@ public class SideloadScanMeta
 
     /// <summary>抓取失败数（目录页 + Mod；仅 Status = PartialFailure 时有值）</summary>
     public int FailedCount { get; set; }
+
+    /// <summary>部分失败后用户是否确认应用了本轮结果</summary>
+    public bool ResultApplied { get; set; }
 
     /// <summary>异常原因（仅 Status = Error 时有值）</summary>
     public string? Error { get; set; }
