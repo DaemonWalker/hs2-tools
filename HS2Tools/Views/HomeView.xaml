@@ -248,6 +248,13 @@
                                 </Style>
                             </Button.Style>
                         </Button>
+                        <StackPanel Margin="0,10,0,0"
+                                    Visibility="{Binding HasSimilarModMatches, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="发现本地或 Sideload 中基础名相同、尾部修订号不同的候选，需逐项确认。"
+                                       Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                            <Button Content="{Binding SimilarModMatchCount, StringFormat='查看相近匹配候选（{0}）'}"
+                                    Command="{Binding OpenSimilarModMatchesCommand}" HorizontalAlignment="Left"/>
+                        </StackPanel>
                         <StackPanel Visibility="{Binding IsComplementing, Converter={StaticResource BoolToVisibility}}" Margin="0,10,0,0">
                             <TextBlock Text="{Binding ComplementProgress, StringFormat='总体进度：{0}'}" FontSize="12"/>
                             <TextBlock Text="{Binding ComplementCurrentName, StringFormat='当前：{0}'}"

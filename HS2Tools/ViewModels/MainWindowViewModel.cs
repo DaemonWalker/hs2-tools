@@ -80,10 +80,17 @@ public partial class MainWindowViewModel : ObservableObject
 
         GamePath = config.Settings.Current.GamePath; // setter 链触发校验
         RefreshStats();
+        if (HasScanData)
+            RebuildSimilarModMatches();
 
         // 其他窗口改配置（代理/收藏/切游戏）或爬虫更新数据库后，统计与缺失数自行刷新
         _config.Changed += (_, _) => UiDispatch.Run(OnConfigChanged);
-        _sideloadDb.Changed += (_, _) => UiDispatch.Run(RefreshStats);
+        _sideloadDb.Changed += (_, _) => UiDispatch.Run(OnSideloadChanged);
+        _downloads.TaskFinished += (_, _) => UiDispatch.Run(() =>
+        {
+            if (HasScanData && !IsApplyingSimilarMatches)
+                RebuildSimilarModMatches();
+        });
     }
 
     /// <summary>请求用户确认停止爬虫（View 订阅弹确认框，确认后调 <see cref="ConfirmStopSideloader"/>）</summary>
@@ -119,7 +126,8 @@ public partial class MainWindowViewModel : ObservableObject
     public GameProfile CurrentProfile => _config.CurrentProfile;
 
     /// <summary>扫描/爬虫进行中或等待应用部分结果时禁止切游戏，避免结果落错数据源</summary>
-    private bool CanSwitchGame() => !IsScanning && SideloaderState != SideloaderUiState.Running
+    private bool CanSwitchGame() => !IsScanning && !IsApplyingSimilarMatches
+                                    && SideloaderState != SideloaderUiState.Running
                                     && _pendingSideloadResult is null;
 
     /// <summary>切换当前游戏（未知 ID 由 GameProfiles.Get 回退 HS2，与配置加载口径一致）</summary>
@@ -160,11 +168,14 @@ public partial class MainWindowViewModel : ObservableObject
         UnusedModCount = 0;
         _pendingMoveBack = null;
         _pendingGuidRepairs = null;
+        ClearSimilarModMatches();
 
         var path = _config.Settings.Current.GamePath;
         GamePath = path;           // setter 有 != 守卫：与已存值相同不会回写配置
         ApplyPathValidation(path); // 路径串相同（setter 未触发）也要按新游戏 exe 重校验
         RefreshStats();
+        if (HasScanData)
+            RebuildSimilarModMatches();
     }
 
     // ==================== 游戏路径 ====================
@@ -260,7 +271,7 @@ public partial class MainWindowViewModel : ObservableObject
 
     public string ScanButtonText => IsScanning ? "分析中..." : ScanCompleted ? "重新分析" : "开始分析";
 
-    private bool CanScan() => IsGamePathValid && !IsScanning;
+    private bool CanScan() => IsGamePathValid && !IsScanning && !IsApplyingSimilarMatches;
 
     [RelayCommand(CanExecute = nameof(CanScan))]
     private async Task ScanAsync()
@@ -274,6 +285,7 @@ public partial class MainWindowViewModel : ObservableObject
         UnusedModCount = 0;
         _pendingMoveBack = null;
         _pendingGuidRepairs = null;
+        ClearSimilarModMatches();
 
         try
         {
@@ -319,6 +331,7 @@ public partial class MainWindowViewModel : ObservableObject
                 s.Current.LastAnalysisTime = DateTime.Now;
             });
             ScanCompleted = true;
+            RebuildSimilarModMatches();
 
             if (_pendingMoveBack.Count > 0)
                 MoveBackConfirmationRequested?.Invoke(this,
@@ -546,6 +559,159 @@ public partial class MainWindowViewModel : ObservableObject
         return (completed.Count(r => !r.Result.IsCopy), completed.Count(r => r.Result.IsCopy), failed);
     }
 
+    // ==================== 相近 GUID 匹配（仅精确本地/Sideload 均未命中时生成） ====================
+
+    public ObservableCollection<SimilarModMatchItem> SimilarModMatchItems { get; } = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSimilarModMatches))]
+    [NotifyCanExecuteChangedFor(nameof(OpenSimilarModMatchesCommand))]
+    private int _similarModMatchCount;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSimilarModMatches))]
+    [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SwitchGameCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenSimilarModMatchesCommand))]
+    private bool _isApplyingSimilarMatches;
+
+    public bool HasSimilarModMatches => SimilarModMatchCount > 0 && !IsApplyingSimilarMatches;
+
+    public event EventHandler? SimilarModMatchesRequested;
+
+    [RelayCommand(CanExecute = nameof(HasSimilarModMatches))]
+    private void OpenSimilarModMatches() => SimilarModMatchesRequested?.Invoke(this, EventArgs.Empty);
+
+    private void OnSideloadChanged()
+    {
+        RefreshStats();
+        if (HasScanData && !IsApplyingSimilarMatches)
+            RebuildSimilarModMatches();
+    }
+
+    private void ClearSimilarModMatches()
+    {
+        SimilarModMatchItems.Clear();
+        SimilarModMatchCount = 0;
+    }
+
+    private void RebuildSimilarModMatches()
+    {
+        var settings = _config.Settings.Current;
+        var activeDownloads = _downloads.Tasks
+            .Where(t => t.Status is DownloadTaskStatus.Pending or DownloadTaskStatus.Downloading
+                or DownloadTaskStatus.Completed)
+            .Select(t => t.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var matches = SimilarModMatchService.BuildMatches(
+                settings.LocalMods, settings.ModUsage.Keys, _sideloadDb.Database)
+            .Where(m => !activeDownloads.Contains(m.RequiredGuid))
+            .ToList();
+
+        ClearSimilarModMatches();
+        foreach (var match in matches)
+        {
+            var item = new SimilarModMatchItem { Match = match };
+            item.SelectionChanged = selected =>
+            {
+                foreach (var other in SimilarModMatchItems.Where(i =>
+                             !ReferenceEquals(i, selected)
+                             && i.RequiredGuid.Equals(selected.RequiredGuid, StringComparison.OrdinalIgnoreCase)))
+                    other.IsSelected = false;
+            };
+            SimilarModMatchItems.Add(item);
+        }
+        SimilarModMatchCount = matches.Count;
+    }
+
+    public async Task<(int Copied, int DownloadsQueued, int Failed)> ConfirmSimilarModMatchesAsync()
+    {
+        if (IsApplyingSimilarMatches)
+            return (0, 0, 0);
+        var selected = SimilarModMatchItems.Where(i => i.IsSelected).ToList();
+        if (selected.Count == 0)
+            return (0, 0, 0);
+
+        IsApplyingSimilarMatches = true;
+        var completed = new List<(SimilarModMatchItem Item, ModInfo Info)>();
+        var failed = 0;
+        var queued = 0;
+        try
+        {
+            var modsDir = _config.GetModsDir();
+            await Task.Run(() =>
+            {
+                foreach (var item in selected.Where(i => i.Match.IsLocal))
+                {
+                    try
+                    {
+                        if (modsDir is null)
+                            throw new InvalidOperationException("游戏 Mods 目录不可用");
+                        var match = item.Match;
+                        var source = _scanner.ReadZipMod(match.LocalMod!.Path).Single();
+                        if (!source.Key.Equals(match.CandidateGuid, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException(
+                                $"源文件当前 GUID 为“{source.Key}”，与候选“{match.CandidateGuid}”不符");
+
+                        var requestedPath = Path.Combine(modsDir,
+                            DownloadManager.SanitizeFileName(match.RequiredGuid) + ".zipmod");
+                        var result = ZipModGuidRepairService.RewriteGuid(
+                            source.Value.Path, match.RequiredGuid, copy: true, requestedPath);
+                        var rewritten = _scanner.ReadZipMod(result.OutputPath).Single();
+                        if (!rewritten.Key.Equals(match.RequiredGuid, StringComparison.Ordinal))
+                            throw new InvalidDataException("副本 GUID 改写校验失败");
+                        completed.Add((item, rewritten.Value));
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        ErrorLog.Log($"相近 Mod 本地复制失败: {item.CandidateGuid} -> {item.RequiredGuid}: {ex.Message}");
+                    }
+                }
+            });
+
+            if (completed.Count > 0)
+            {
+                _config.Update(s =>
+                {
+                    foreach (var (item, info) in completed)
+                    {
+                        s.Current.LocalMods[item.RequiredGuid] = info;
+                        s.Current.ModEntries.Add(new ModScanEntry { Guid = item.RequiredGuid, Info = info });
+                    }
+                });
+            }
+
+            var downloadDir = _config.GetModDownloadDir();
+            foreach (var item in selected.Where(i => !i.Match.IsLocal))
+            {
+                try
+                {
+                    if (downloadDir is null)
+                        throw new InvalidOperationException("Mod 下载目录不可用");
+                    if (!_sideloadDb.Database.TryGetValue(item.CandidateGuid, out var url))
+                        throw new InvalidDataException("所选候选已不在当前 Sideload 数据库中");
+                    if (!_downloads.StartDownload(item.RequiredGuid, url, downloadDir,
+                            DownloadBaseUrlOverride ?? _config.CurrentProfile.SideloadBaseUrl,
+                            sourceGuid: item.CandidateGuid))
+                        throw new InvalidOperationException("相同目标 GUID 的下载任务已存在");
+                    queued++;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    ErrorLog.Log($"相近 Mod 下载排队失败: {item.CandidateGuid} -> {item.RequiredGuid}: {ex.Message}");
+                }
+            }
+        }
+        finally
+        {
+            IsApplyingSimilarMatches = false;
+            RebuildSimilarModMatches();
+        }
+        return (completed.Count, queued, failed);
+    }
+
     /// <summary>阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数，未变化卡片直接复用缓存。</summary>
     private async Task<Dictionary<string, int>> ScanPngUsageAsync(string dir, string scope, Action<string> report)
     {
@@ -572,7 +738,7 @@ public partial class MainWindowViewModel : ObservableObject
                     }
                     return null;
                 });
-            foreach (var item in batchResults)
+            foreach (var item in batchResults.OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
             {
                 foreach (var modId in item.ModIDs)
                     usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;

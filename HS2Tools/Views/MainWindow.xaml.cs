@@ -78,6 +78,12 @@ public partial class MainWindow : Window
                 "GUID 修复完成", MessageBoxButton.OK,
                 failed > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         };
+
+        vm.SimilarModMatchesRequested += (_, _) =>
+        {
+            var dialog = new SimilarModMatchWindow { Owner = this, DataContext = vm };
+            dialog.ShowDialog();
+        };
     }
 
     private static void Navigate<T>() where T : UserControl => App.Services.Pages.Show<T>();

@@ -130,4 +130,54 @@ public class DownloadManagerTests : IDisposable
         Assert.Contains("校验失败", task!.ErrorMessage);
         Assert.False(File.Exists(task.OutputPath)); // 损坏文件不留在 mods 目录
     }
+
+    [Fact]
+    public async Task Download_SimilarGuid_RewritesBeforeCompletion()
+    {
+        using var server = new TestHttpServer();
+        var bytes = File.ReadAllBytes(WriteZipmod(_dir, "source.zipmod", MakeManifest("abc"), deflate: false));
+        server.MapFile("/abc.zipmod", bytes);
+        var downloads = new DownloadManager(baseUrl: server.BaseUrl);
+        var finished = new TaskCompletionSource();
+        string? guidAtCompletion = null;
+        downloads.TaskFinished += (_, t) =>
+        {
+            if (t.Status != DownloadTaskStatus.Completed)
+                return;
+            guidAtCompletion = new ScannerService().ReadZipMod(t.OutputPath).Single().Key;
+            finished.TrySetResult();
+        };
+
+        Assert.True(downloads.StartDownload("abc001", "abc.zipmod", _dir, sourceGuid: "abc"));
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+
+        var task = downloads.Tasks.Single(t => t.Id == "abc001");
+        Assert.Equal("abc", task.SourceGuid);
+        Assert.Equal("abc001", guidAtCompletion);
+        Assert.Equal("abc001", new ScannerService().ReadZipMod(task.OutputPath).Single().Key);
+        Assert.Equal("abc", new ScannerService().ReadZipMod(Path.Combine(_dir, "source.zipmod")).Single().Key);
+    }
+
+    [Fact]
+    public async Task Download_SimilarGuid_RejectsChangedRemoteGuid_AndDeletesFile()
+    {
+        using var server = new TestHttpServer();
+        var bytes = File.ReadAllBytes(WriteZipmod(_dir, "changed.zipmod", MakeManifest("other"), deflate: false));
+        server.MapFile("/abc.zipmod", bytes);
+        var downloads = new DownloadManager(baseUrl: server.BaseUrl);
+        var finished = new TaskCompletionSource();
+        downloads.TaskFinished += (_, t) =>
+        {
+            if (t.Status == DownloadTaskStatus.Failed)
+                finished.TrySetResult();
+        };
+
+        downloads.StartDownload("abc001", "abc.zipmod", _dir, sourceGuid: "abc");
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+
+        var task = downloads.Tasks.Single(t => t.Id == "abc001");
+        Assert.Equal(DownloadTaskStatus.Failed, task.Status);
+        Assert.Contains("与所选候选", task.ErrorMessage);
+        Assert.False(File.Exists(task.OutputPath));
+    }
 }

@@ -18,6 +18,9 @@ public class DownloadTask
     /// <summary>完整下载 URL</summary>
     public required string Url { get; init; }
 
+    /// <summary>相近匹配下载的原始 GUID；非 null 时提交前校验并改写为 Id</summary>
+    public string? SourceGuid { get; init; }
+
     /// <summary>输出文件路径（{dir}/{name}.zipmod）</summary>
     public required string OutputPath { get; init; }
 

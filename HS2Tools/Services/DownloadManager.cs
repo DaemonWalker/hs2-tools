@@ -80,8 +80,10 @@ public class DownloadManager
     /// <summary>
     /// 将下载加入全局串行队列。同名任务等待中或下载中时拒绝重复触发（返回 false）。
     /// baseUrl 为空时用构造默认值；多游戏场景由调用方传当前游戏档案的 SideloadBaseUrl。
+    /// sourceGuid 用于相近匹配：远端实际 GUID 必须一致，提交前改写为任务 Id。
     /// </summary>
-    public bool StartDownload(string name, string relativeUrl, string dir, string? baseUrl = null)
+    public bool StartDownload(string name, string relativeUrl, string dir, string? baseUrl = null,
+        string? sourceGuid = null)
     {
         DownloadTask task;
         lock (_sync)
@@ -94,6 +96,7 @@ public class DownloadManager
             {
                 Id = name,
                 Url = (baseUrl ?? _baseUrl) + relativeUrl,
+                SourceGuid = sourceGuid,
                 OutputPath = Path.Combine(dir, SanitizeFileName(name) + ".zipmod"),
                 Status = DownloadTaskStatus.Pending,
                 Cts = new CancellationTokenSource(),
@@ -238,8 +241,11 @@ public class DownloadManager
 
             var downloader = GetOrCreateDownloader();
             var progress = new DirectProgress<DownloadProgress>(p => OnProgress(task, p));
+            Action<string> validate = task.SourceGuid is null
+                ? ValidateZipmod
+                : path => ValidateAndRewriteGuid(path, task.SourceGuid, task.Id);
             await downloader.DownloadWithValidationAsync(
-                task.Url, task.OutputPath, resume: true, ValidateZipmod, progress, task.Cts!.Token);
+                task.Url, task.OutputPath, resume: true, validate, progress, task.Cts!.Token);
 
             // 校验成功后下载器才发送完成消息，由 OnProgress 处理
         }
@@ -303,6 +309,29 @@ public class DownloadManager
         {
             try { File.Delete(path); } catch { /* 删除失败保留现场，错误仍会上报 */ }
             throw new InvalidDataException($"zipmod 校验失败：{ex.Message}", ex);
+        }
+    }
+
+    private static void ValidateAndRewriteGuid(string path, string expectedSourceGuid, string targetGuid)
+    {
+        try
+        {
+            ValidateZipmod(path);
+            var scanner = new ScannerService();
+            var source = scanner.ReadZipMod(path).Single();
+            if (!source.Key.Equals(expectedSourceGuid, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException(
+                    $"远端实际 GUID 为“{source.Key}”，与所选候选“{expectedSourceGuid}”不符");
+
+            ZipModGuidRepairService.RewriteGuid(path, targetGuid, copy: false);
+            var rewritten = scanner.ReadZipMod(path).Single().Key;
+            if (!rewritten.Equals(targetGuid, StringComparison.Ordinal))
+                throw new InvalidDataException($"GUID 改写校验失败：期望“{targetGuid}”，实际“{rewritten}”");
+        }
+        catch (Exception ex)
+        {
+            try { File.Delete(path); } catch { }
+            throw new InvalidDataException($"相近 Mod 的 GUID 改写失败：{ex.Message}", ex);
         }
     }
 

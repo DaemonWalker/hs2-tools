@@ -46,10 +46,12 @@ public static class ZipModGuidRepairService
         return plans;
     }
 
-    public static ZipModGuidRepairResult RewriteGuid(string sourcePath, string newGuid, bool copy)
+    public static ZipModGuidRepairResult RewriteGuid(string sourcePath, string newGuid, bool copy,
+        string? requestedOutputPath = null)
     {
         string outputPath = copy
-            ? ScannerService.UniqueTargetPath(Path.GetDirectoryName(sourcePath) ?? ".", sourcePath)
+            ? ScannerService.UniqueTargetPath(
+                Path.GetDirectoryName(requestedOutputPath ?? sourcePath) ?? ".", requestedOutputPath ?? sourcePath)
             : sourcePath;
         string tempPath = outputPath + $".guidrepair-{Guid.NewGuid():N}.tmp";
         try
