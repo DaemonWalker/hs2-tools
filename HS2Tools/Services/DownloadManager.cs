@@ -237,11 +237,11 @@ public class DownloadManager
                 Directory.CreateDirectory(dir);
 
             var downloader = GetOrCreateDownloader();
-            var progress = new Progress<DownloadProgress>(p => OnProgress(task, p));
-            await downloader.DownloadAsync(task.Url, task.OutputPath, resume: true, progress, task.Cts!.Token);
-            ValidateZipmod(task.OutputPath); // 200 的 HTML 错误页/损坏文件不得标记完成
+            var progress = new DirectProgress<DownloadProgress>(p => OnProgress(task, p));
+            await downloader.DownloadWithValidationAsync(
+                task.Url, task.OutputPath, resume: true, ValidateZipmod, progress, task.Cts!.Token);
 
-            // 完成消息已在 OnProgress 中处理
+            // 校验成功后下载器才发送完成消息，由 OnProgress 处理
         }
         catch (DownloadCancelledException)
         {
@@ -304,6 +304,16 @@ public class DownloadManager
             try { File.Delete(path); } catch { /* 删除失败保留现场，错误仍会上报 */ }
             throw new InvalidDataException($"zipmod 校验失败：{ex.Message}", ex);
         }
+    }
+
+    /// <summary>直接在当前线程上报；UI 封送由订阅方负责，避免无线程上下文时回调乱序</summary>
+    private sealed class DirectProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _onReport;
+
+        public DirectProgress(Action<T> onReport) => _onReport = onReport;
+
+        public void Report(T value) => _onReport(value);
     }
 
     private void OnProgress(DownloadTask task, DownloadProgress p)

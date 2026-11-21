@@ -676,6 +676,10 @@ internal sealed class TestHttpServer : IDisposable
     private readonly HttpListener _listener;
     private readonly CancellationTokenSource _cts = new();
     private readonly Dictionary<string, Func<HttpListenerRequest, HttpListenerResponse, Task>> _routes = new();
+    private int _activeRequests;
+    private int _maxConcurrentRequests;
+    private int _activeSegmentDownloads;
+    private int _maxConcurrentSegmentDownloads;
 
     public TestHttpServer()
     {
@@ -689,12 +693,21 @@ internal sealed class TestHttpServer : IDisposable
     public int Port { get; }
     public string BaseUrl => $"http://127.0.0.1:{Port}/";
     public ConcurrentBag<RequestLog> Requests { get; } = new();
+    public int MaxConcurrentRequests => _maxConcurrentRequests;
+    public int MaxConcurrentSegmentDownloads => _maxConcurrentSegmentDownloads;
 
     public void MapHtml(string path, string html) =>
         _routes[path] = async (req, resp) => await WriteBytes(req, resp, 200, Encoding.UTF8.GetBytes(html));
 
-    public void MapFile(string path, byte[] data, bool supportRange = true) =>
-        _routes[path] = (req, resp) => ServeFile(req, resp, data, supportRange);
+    public void MapFile(string path, byte[] data, bool supportRange = true, int delayMs = 0) =>
+        _routes[path] = (req, resp) => ServeFile(req, resp, data, supportRange, delayMs);
+
+    public void MapFileWithExplicitRangeIgnored(string path, byte[] data) =>
+        _routes[path] = async (req, resp) =>
+        {
+            var isProbe = req.HttpMethod == "HEAD" || req.Headers["Range"] == "bytes=0-0";
+            await ServeFile(req, resp, data, supportRange: isProbe);
+        };
 
     public void MapFileWithTruncatedExplicitRange(string path, byte[] data) =>
         _routes[path] = async (req, resp) =>
@@ -730,6 +743,14 @@ internal sealed class TestHttpServer : IDisposable
     public void MapSlow(string path, byte[] data, int chunkSize, int delayMs) =>
         _routes[path] = async (req, resp) =>
         {
+            if (req.HttpMethod == "HEAD")
+            {
+                resp.StatusCode = 200;
+                resp.ContentLength64 = data.Length;
+                resp.Close();
+                return;
+            }
+
             resp.StatusCode = 200;
             resp.SendChunked = true;
             for (var off = 0; off < data.Length; off += chunkSize)
@@ -773,6 +794,8 @@ internal sealed class TestHttpServer : IDisposable
             }
             _ = Task.Run(async () =>
             {
+                var active = Interlocked.Increment(ref _activeRequests);
+                UpdateMax(ref _maxConcurrentRequests, active);
                 try
                 {
                     var path = ctx.Request.Url!.AbsolutePath;
@@ -792,7 +815,21 @@ internal sealed class TestHttpServer : IDisposable
                 {
                     try { ctx.Response.Abort(); } catch { }
                 }
+                finally
+                {
+                    Interlocked.Decrement(ref _activeRequests);
+                }
             });
+        }
+    }
+
+    private static void UpdateMax(ref int target, int active)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref target);
+            if (current >= active || Interlocked.CompareExchange(ref target, active, current) == current)
+                return;
         }
     }
 
@@ -805,7 +842,7 @@ internal sealed class TestHttpServer : IDisposable
         resp.Close();
     }
 
-    private static async Task ServeFile(HttpListenerRequest req, HttpListenerResponse resp, byte[] data, bool supportRange)
+    private async Task ServeFile(HttpListenerRequest req, HttpListenerResponse resp, byte[] data, bool supportRange, int delayMs = 0)
     {
         if (req.HttpMethod == "HEAD")
         {
@@ -847,9 +884,39 @@ internal sealed class TestHttpServer : IDisposable
             resp.StatusCode = 206;
             resp.Headers["Content-Range"] = $"bytes {start}-{end}/{data.Length}";
             resp.ContentLength64 = len;
-            if (len > 0)
-                await resp.OutputStream.WriteAsync(data.AsMemory((int)start, len));
-            resp.Close();
+            var trackSegment = len > 1;
+            if (trackSegment)
+            {
+                var active = Interlocked.Increment(ref _activeSegmentDownloads);
+                UpdateMax(ref _maxConcurrentSegmentDownloads, active);
+            }
+            try
+            {
+                if (len > 0)
+                {
+                    if (delayMs <= 0)
+                    {
+                        await resp.OutputStream.WriteAsync(data.AsMemory((int)start, len));
+                    }
+                    else
+                    {
+                        for (var offset = 0; offset < len; offset += 4096)
+                        {
+                            var count = Math.Min(4096, len - offset);
+                            await resp.OutputStream.WriteAsync(data.AsMemory((int)start + offset, count));
+                            await resp.OutputStream.FlushAsync();
+                            if (offset + count < len)
+                                await Task.Delay(delayMs);
+                        }
+                    }
+                }
+                resp.Close();
+            }
+            finally
+            {
+                if (trackSegment)
+                    Interlocked.Decrement(ref _activeSegmentDownloads);
+            }
         }
         else
         {

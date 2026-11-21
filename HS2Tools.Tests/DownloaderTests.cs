@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using HS2Tools.Models;
 using HS2Tools.Services;
 using static HS2Tools.Tests.TestAssets;
@@ -114,6 +115,156 @@ public class DownloaderTests : IDisposable
 
         Assert.Equal(payload, File.ReadAllBytes(output));
         Assert.DoesNotContain(_server.Requests, r => r.Range != null);
+    }
+
+    [Fact]
+    public async Task Download_LargeFile_UsesSegmentsAndWritesExactFile()
+    {
+        const int segmentSize = 32 * 1024;
+        var payload = Payload(segmentSize * 2 + 123);
+        _server.MapFile("/large.zipmod", payload);
+        var output = Path.Combine(_dir, "large.zipmod");
+        var messages = new List<DownloadProgress>();
+
+        await new DownloaderService(null, segmentSize, 4).DownloadAsync(
+            _server.BaseUrl + "large.zipmod", output, resume: true,
+            new SyncProgress<DownloadProgress>(messages.Add), TestContext.Current.CancellationToken);
+
+        Assert.Equal(payload, File.ReadAllBytes(output));
+        Assert.Contains(_server.Requests, r => r.Range == "bytes=0-0");
+        Assert.Contains(_server.Requests, r => r.Range == $"bytes=0-{segmentSize - 1}");
+        Assert.Contains(_server.Requests, r => r.Range == $"bytes={segmentSize}-{segmentSize * 2 - 1}");
+        Assert.Contains(_server.Requests, r => r.Range == $"bytes={segmentSize * 2}-{payload.Length - 1}");
+        Assert.Contains(messages, m => m.Type == DownloadMessageType.Progress
+            && m.Total == payload.Length && m.Downloaded > 0);
+        Assert.Equal(payload.Length, Assert.Single(messages, m => m.Type == DownloadMessageType.Complete).Total);
+        Assert.False(File.Exists(output + ".part"));
+        Assert.False(File.Exists(output + ".part.json"));
+    }
+
+    [Fact]
+    public async Task Download_LargeFile_RespectsConcurrencyLimit()
+    {
+        const int segmentSize = 16 * 1024;
+        var payload = Payload(segmentSize * 8);
+        _server.MapFile("/limited.zipmod", payload, delayMs: 10);
+        var output = Path.Combine(_dir, "limited.zipmod");
+
+        await new DownloaderService(null, segmentSize, 2).DownloadAsync(
+            _server.BaseUrl + "limited.zipmod", output, false,
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(payload, File.ReadAllBytes(output));
+        Assert.InRange(_server.MaxConcurrentSegmentDownloads, 1, 2);
+    }
+
+    [Fact]
+    public async Task Download_LargeFileWithoutRangeSupport_FallsBackToSingleStream()
+    {
+        const int segmentSize = 32 * 1024;
+        var payload = Payload(segmentSize * 2 + 17);
+        _server.MapFile("/fallback.zipmod", payload, supportRange: false);
+        var output = Path.Combine(_dir, "fallback.zipmod");
+
+        await new DownloaderService(null, segmentSize, 4).DownloadAsync(
+            _server.BaseUrl + "fallback.zipmod", output, true,
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(payload, File.ReadAllBytes(output));
+        Assert.Contains(_server.Requests, r => r.Range == "bytes=0-0");
+        Assert.Contains(_server.Requests, r => r.Method == "GET" && r.Range == null);
+        Assert.False(File.Exists(output + ".part"));
+    }
+
+    [Fact]
+    public async Task Download_SegmentRangeIgnoredAfterProbe_RestartsWithSingleStream()
+    {
+        const int segmentSize = 32 * 1024;
+        var payload = Payload(segmentSize * 2);
+        _server.MapFileWithExplicitRangeIgnored("/mid-fallback.zipmod", payload);
+        var output = Path.Combine(_dir, "mid-fallback.zipmod");
+
+        await new DownloaderService(null, segmentSize, 4).DownloadAsync(
+            _server.BaseUrl + "mid-fallback.zipmod", output, true,
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(payload, File.ReadAllBytes(output));
+        Assert.Contains(_server.Requests, r => r.Range == $"bytes=0-{segmentSize - 1}");
+        Assert.Contains(_server.Requests, r => r.Method == "GET" && r.Range == null);
+        Assert.False(File.Exists(output + ".part"));
+        Assert.False(File.Exists(output + ".part.json"));
+    }
+
+    [Fact]
+    public async Task Download_SegmentedCancel_RetryResumesConfirmedOffsets()
+    {
+        const int segmentSize = 32 * 1024;
+        var payload = Payload(segmentSize * 3);
+        _server.MapFile("/resume.zipmod", payload, delayMs: 30);
+        var output = Path.Combine(_dir, "resume.zipmod");
+        using var cts = new CancellationTokenSource(150);
+
+        await Assert.ThrowsAsync<DownloadCancelledException>(() =>
+            new DownloaderService(null, segmentSize, 4).DownloadAsync(
+                _server.BaseUrl + "resume.zipmod", output, true, null, cts.Token));
+
+        Assert.True(File.Exists(output + ".part"));
+        Assert.True(File.Exists(output + ".part.json"));
+        var priorRequests = _server.Requests.ToHashSet();
+        _server.MapFile("/resume.zipmod", payload);
+
+        await new DownloaderService(null, segmentSize, 4).DownloadAsync(
+            _server.BaseUrl + "resume.zipmod", output, true,
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(payload, File.ReadAllBytes(output));
+        Assert.Contains(_server.Requests.Where(r => !priorRequests.Contains(r)), r =>
+        {
+            var match = Regex.Match(r.Range ?? "", @"^bytes=(\d+)-");
+            return match.Success && long.Parse(match.Groups[1].Value) % segmentSize != 0;
+        });
+        Assert.False(File.Exists(output + ".part"));
+        Assert.False(File.Exists(output + ".part.json"));
+    }
+
+    [Fact]
+    public async Task Download_SegmentedValidation_RunsBeforeCommit()
+    {
+        const int segmentSize = 16 * 1024;
+        var payload = Payload(segmentSize * 2);
+        _server.MapFile("/validated.zipmod", payload);
+        var output = Path.Combine(_dir, "validated.zipmod");
+        var validatedPath = "";
+
+        await new DownloaderService(null, segmentSize, 2).DownloadWithValidationAsync(
+            _server.BaseUrl + "validated.zipmod", output, false, path =>
+            {
+                validatedPath = path;
+                Assert.Equal(output + ".part", path);
+                Assert.False(File.Exists(output));
+                Assert.Equal(payload, File.ReadAllBytes(path));
+            }, ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(output + ".part", validatedPath);
+        Assert.Equal(payload, File.ReadAllBytes(output));
+    }
+
+    [Fact]
+    public async Task Download_SegmentedValidationFailure_DeletesArtifactsWithoutCommit()
+    {
+        const int segmentSize = 16 * 1024;
+        var payload = Payload(segmentSize * 2);
+        _server.MapFile("/invalid.zipmod", payload);
+        var output = Path.Combine(_dir, "invalid.zipmod");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            new DownloaderService(null, segmentSize, 2).DownloadWithValidationAsync(
+                _server.BaseUrl + "invalid.zipmod", output, false,
+                _ => throw new InvalidDataException("bad zip"), ct: TestContext.Current.CancellationToken));
+
+        Assert.False(File.Exists(output));
+        Assert.False(File.Exists(output + ".part"));
+        Assert.False(File.Exists(output + ".part.json"));
     }
 
     [Fact]
