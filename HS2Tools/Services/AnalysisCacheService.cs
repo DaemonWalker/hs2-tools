@@ -7,7 +7,7 @@ namespace HS2Tools.Services;
 /// <summary>可重建的 Mod/卡片分析结果缓存；文件指纹或缓存版本不匹配时回退完整解析。</summary>
 public sealed class AnalysisCacheService : IDisposable
 {
-    private const int CacheVersion = 1;
+    private const int CacheVersion = 2;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly object _sync = new();
     private SqliteConnection? _connection;
@@ -36,6 +36,11 @@ public sealed class AnalysisCacheService : IDisposable
         command.ExecuteNonQuery();
         command.CommandText = "PRAGMA user_version;";
         var version = Convert.ToInt32(command.ExecuteScalar());
+        if (version != CacheVersion)
+        {
+            command.CommandText = "DROP TABLE IF EXISTS card_cache; DROP TABLE IF EXISTS zipmod_cache;";
+            command.ExecuteNonQuery();
+        }
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS card_cache (
                 game_id TEXT NOT NULL,
@@ -46,6 +51,7 @@ public sealed class AnalysisCacheService : IDisposable
                 names_json TEXT NOT NULL,
                 mod_ids_json TEXT NOT NULL,
                 game_data_len INTEGER NOT NULL,
+                structural_ok INTEGER NOT NULL,
                 PRIMARY KEY (game_id, scope, path)
             );
             CREATE TABLE IF NOT EXISTS zipmod_cache (
@@ -62,8 +68,6 @@ public sealed class AnalysisCacheService : IDisposable
         command.ExecuteNonQuery();
         if (version != CacheVersion)
         {
-            command.CommandText = "DELETE FROM card_cache; DELETE FROM zipmod_cache;";
-            command.ExecuteNonQuery();
             command.CommandText = $"PRAGMA user_version={CacheVersion};";
             command.ExecuteNonQuery();
         }
@@ -93,7 +97,7 @@ public sealed class AnalysisCacheService : IDisposable
             {
                 using var command = _connection.CreateCommand();
                 command.CommandText = """
-                    SELECT path, file_length, last_write_utc_ticks, names_json, mod_ids_json, game_data_len
+                    SELECT path, file_length, last_write_utc_ticks, names_json, mod_ids_json, game_data_len, structural_ok
                     FROM card_cache WHERE game_id=$gameId AND scope=$scope;
                     """;
                 command.Parameters.AddWithValue("$gameId", gameId);
@@ -110,6 +114,7 @@ public sealed class AnalysisCacheService : IDisposable
                         Names = JsonSerializer.Deserialize<List<string>>(reader.GetString(3), JsonOptions) ?? new(),
                         ModIDs = JsonSerializer.Deserialize<List<string>>(reader.GetString(4), JsonOptions) ?? new(),
                         GameDataLen = reader.GetInt32(5),
+                        StructuralOk = reader.GetBoolean(6),
                     };
                     results[entry.Path] = entry;
                 }
@@ -133,7 +138,7 @@ public sealed class AnalysisCacheService : IDisposable
             {
                 using var command = _connection.CreateCommand();
                 command.CommandText = """
-                    SELECT file_length, last_write_utc_ticks, names_json, mod_ids_json, game_data_len
+                    SELECT file_length, last_write_utc_ticks, names_json, mod_ids_json, game_data_len, structural_ok
                     FROM card_cache WHERE game_id=$gameId AND scope=$scope AND path=$path;
                     """;
                 command.Parameters.AddWithValue("$gameId", gameId);
@@ -154,6 +159,7 @@ public sealed class AnalysisCacheService : IDisposable
                     CharaNames = JsonSerializer.Deserialize<List<string>>(reader.GetString(2), JsonOptions) ?? new(),
                     ModIDs = JsonSerializer.Deserialize<List<string>>(reader.GetString(3), JsonOptions) ?? new(),
                     GameDataLen = reader.GetInt32(4),
+                    StructuralOk = reader.GetBoolean(5),
                 };
             }
             catch (Exception ex)
@@ -215,11 +221,11 @@ public sealed class AnalysisCacheService : IDisposable
         command.Transaction = transaction;
         command.CommandText = """
             INSERT INTO card_cache
-                (game_id, scope, path, file_length, last_write_utc_ticks, names_json, mod_ids_json, game_data_len)
-            VALUES ($gameId, $scope, $path, $length, $ticks, $names, $modIds, $gameDataLen)
+                (game_id, scope, path, file_length, last_write_utc_ticks, names_json, mod_ids_json, game_data_len, structural_ok)
+            VALUES ($gameId, $scope, $path, $length, $ticks, $names, $modIds, $gameDataLen, $structuralOk)
             ON CONFLICT(game_id, scope, path) DO UPDATE SET
                 file_length=$length, last_write_utc_ticks=$ticks, names_json=$names,
-                mod_ids_json=$modIds, game_data_len=$gameDataLen;
+                mod_ids_json=$modIds, game_data_len=$gameDataLen, structural_ok=$structuralOk;
             """;
         command.Parameters.AddWithValue("$gameId", gameId);
         command.Parameters.AddWithValue("$scope", scope);
@@ -229,6 +235,7 @@ public sealed class AnalysisCacheService : IDisposable
         command.Parameters.AddWithValue("$names", JsonSerializer.Serialize(entry.Names, JsonOptions));
         command.Parameters.AddWithValue("$modIds", JsonSerializer.Serialize(entry.ModIDs, JsonOptions));
         command.Parameters.AddWithValue("$gameDataLen", entry.GameDataLen);
+        command.Parameters.AddWithValue("$structuralOk", entry.StructuralOk);
         command.ExecuteNonQuery();
     }
 

@@ -7,7 +7,7 @@ namespace HS2Tools.Services;
 
 /// <summary>
 /// 卡片/场景数据区结构化解析（基准：BepisPlugins ExtensibleSaveFormat + Sideloader UAR）。
-/// 只使用底层 MessagePackReader 步行结构，不用类型 resolver，避免格式变体风险。
+/// 只使用底层 MessagePackReader/Writer 步行与局部重写，不用类型 resolver，避免格式变体风险。
 ///
 /// ChaFile blob 布局（BinaryWriter 序列化）：
 /// int32 loadProductNo → 7bit 前缀字符串卡头标记 → 7bit 前缀版本字符串
@@ -24,7 +24,7 @@ namespace HS2Tools.Services;
 /// KK/KKS "lastname"+"firstname" 按序拼接）；Mod GUID 在 KKEx 块（或文件尾 KKEx trailer）
 /// 的 UAR 插件数据里——KKEx/UAR 结构各游戏相同。
 /// </summary>
-internal static class CharaCardParser
+internal static partial class CharaCardParser
 {
     /// <summary>一套卡片格式：角色卡/坐标卡标记 + Parameter 块名字段键 + blob 信封差异</summary>
     private sealed class CardFormat
@@ -71,6 +71,14 @@ internal static class CharaCardParser
         public List<string> Values => _values.Select(kv => kv.Key).ToList();
         public void Add(string value) => _values.TryAdd(value, 0, out _);
     }
+
+    private sealed record BlockInfo(
+        string Name, long Pos, long Size,
+        int PosStart, int PosLength, int SizeStart, int SizeLength);
+
+    private readonly record struct Patch(int Start, int Length, byte[] Data);
+
+    private sealed record BlobRewrite(int Start, int Length, byte[] Data, int ReplacementCount);
 
     /// <summary>
     /// 解析数据区（真 IEND chunk 之后的部分，见 ScannerService.GetDataRegionOffset）。
@@ -209,9 +217,9 @@ internal static class CharaCardParser
     }
 
     /// <summary>BlockHeader msgpack：map { "lstInfo": [ Info, ... ] }；Info 为数组式 4 元素 [name, version, pos, size]（兼容 map 形式）</summary>
-    private static List<(string Name, long Pos, long Size)> ParseBlockHeader(ReadOnlySequence<byte> seq)
+    private static List<BlockInfo> ParseBlockHeader(ReadOnlySequence<byte> seq)
     {
-        var infos = new List<(string, long, long)>();
+        var infos = new List<BlockInfo>();
         var reader = new MessagePackReader(seq);
         var mapCount = reader.ReadMapHeader();
         for (var i = 0; i < mapCount; i++)
@@ -234,28 +242,41 @@ internal static class CharaCardParser
                         throw new InvalidDataException("BlockHeader.Info array too short");
                     var name = reader.ReadString() ?? "";
                     _ = reader.ReadString(); // version
+                    var posStart = CheckedOffset(reader.Consumed);
                     var pos = reader.ReadInt64();
+                    var posLength = CheckedOffset(reader.Consumed) - posStart;
+                    var sizeStart = CheckedOffset(reader.Consumed);
                     var size = reader.ReadInt64();
+                    var sizeLength = CheckedOffset(reader.Consumed) - sizeStart;
                     for (var k = 4; k < fieldCount; k++)
                         reader.Skip();
-                    infos.Add((name, pos, size));
+                    infos.Add(new BlockInfo(name, pos, size, posStart, posLength, sizeStart, sizeLength));
                 }
                 else if (reader.NextMessagePackType == MessagePackType.Map)
                 {
                     var fieldCount = reader.ReadMapHeader();
                     string name = "";
                     long pos = 0, size = 0;
+                    int posStart = -1, posLength = 0, sizeStart = -1, sizeLength = 0;
                     for (var k = 0; k < fieldCount; k++)
                     {
                         switch (reader.ReadString())
                         {
                             case "name": name = reader.ReadString() ?? ""; break;
-                            case "pos": pos = reader.ReadInt64(); break;
-                            case "size": size = reader.ReadInt64(); break;
+                            case "pos":
+                                posStart = CheckedOffset(reader.Consumed);
+                                pos = reader.ReadInt64();
+                                posLength = CheckedOffset(reader.Consumed) - posStart;
+                                break;
+                            case "size":
+                                sizeStart = CheckedOffset(reader.Consumed);
+                                size = reader.ReadInt64();
+                                sizeLength = CheckedOffset(reader.Consumed) - sizeStart;
+                                break;
                             default: reader.Skip(); break;
                         }
                     }
-                    infos.Add((name, pos, size));
+                    infos.Add(new BlockInfo(name, pos, size, posStart, posLength, sizeStart, sizeLength));
                 }
                 else
                 {
@@ -265,6 +286,8 @@ internal static class CharaCardParser
         }
         return infos;
     }
+
+    private static int CheckedOffset(long offset) => checked((int)offset);
 
     /// <summary>
     /// Parameter/Parameter2 块：msgpack map（字符串键），按 NameKeys 取字符串值并顺序拼接

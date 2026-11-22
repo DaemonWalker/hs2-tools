@@ -397,6 +397,7 @@ public class ScannerService
             ImageLength = includeImage ? offset : 0,
             FileLength = data.Length,
             LastWriteTimeUtcTicks = File.GetLastWriteTimeUtc(filePath).Ticks,
+            StructuralOk = structuralOk,
         };
     }
 

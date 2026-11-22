@@ -148,6 +148,16 @@ internal static class TestAssets
     public static byte[] BuildKkCharaDataRegion(string lastName, string firstName, string[] guids)
         => BuildKkCharaBlob(lastName, firstName, guids);
 
+    public static byte[] BuildKkCharaDataRegionWithKkexFirst(string lastName, string firstName, string[] guids)
+    {
+        var infos = new List<(string Name, byte[] Data)>
+        {
+            ("KKEx", BuildKkexBlock(guids)),
+            ("Parameter", BuildKkNameBlock(lastName, firstName)),
+        };
+        return BuildBlob("【KoiKatuChara】", infos, kkEnvelope: true);
+    }
+
     /// <summary>合成混合数据区：HS2 角色 blob + KK 角色 blob（场景内嵌多游戏 blob 情形）</summary>
     public static byte[] BuildMixedCharaDataRegion(
         string hs2Name, string[] hs2Guids, string kkLastName, string kkFirstName, string[] kkGuids)

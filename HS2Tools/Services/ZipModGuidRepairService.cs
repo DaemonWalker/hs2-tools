@@ -1,14 +1,7 @@
 using System.IO.Compression;
 using System.Xml.Linq;
-using HS2Tools.Models;
 
 namespace HS2Tools.Services;
-
-public sealed record ZipModGuidRepairPlan(
-    string SourcePath,
-    string CurrentGuid,
-    string? DirectGuid,
-    IReadOnlyList<string> CopyGuids);
 
 public sealed record ZipModGuidRepairResult(
     string SourcePath,
@@ -18,34 +11,6 @@ public sealed record ZipModGuidRepairResult(
 
 public static class ZipModGuidRepairService
 {
-    public static List<ZipModGuidRepairPlan> BuildPlans(
-        IReadOnlyDictionary<string, ModInfo> localMods,
-        IEnumerable<string> referencedGuids)
-    {
-        var references = referencedGuids.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var referenced = references.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var plans = new List<ZipModGuidRepairPlan>();
-        foreach (var (currentGuid, info) in localMods.OrderBy(kv => kv.Value.Path, StringComparer.OrdinalIgnoreCase))
-        {
-            var targets = references.Where(guid =>
-                    !localMods.ContainsKey(guid) &&
-                    !string.Equals(guid, currentGuid, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(guid.Trim(), currentGuid.Trim(), StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (targets.Count == 0)
-                continue;
-            if (referenced.Contains(currentGuid))
-            {
-                plans.Add(new ZipModGuidRepairPlan(info.Path, currentGuid, null, targets));
-            }
-            else
-            {
-                plans.Add(new ZipModGuidRepairPlan(info.Path, currentGuid, targets[0], targets.Skip(1).ToList()));
-            }
-        }
-        return plans;
-    }
-
     public static ZipModGuidRepairResult RewriteGuid(string sourcePath, string newGuid, bool copy,
         string? requestedOutputPath = null)
     {

@@ -67,21 +67,38 @@ public partial class MainWindow : Window
                 "移回完成", MessageBoxButton.OK, MessageBoxImage.Information);
         };
 
-        vm.GuidRepairConfirmationRequested += async (_, msg) =>
+        vm.CardGuidRepairConfirmationRequested += async (_, plans) =>
         {
-            var result = MessageBox.Show(this, msg,
-                "修复 zipmod 的 GUID 首尾空格？", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (result != MessageBoxResult.Yes)
+            var repaired = 0;
+            var declined = 0;
+            var errors = new List<string>();
+            foreach (var plan in plans)
             {
-                vm.DismissGuidRepair();
-                return;
+                var replacements = string.Join("\n", plan.Replacements.Select(pair =>
+                    $"[{pair.Key}]  →  [{pair.Value}]"));
+                var result = MessageBox.Show(this,
+                    $"卡片：{plan.Path}\n\n将修改以下 Mod GUID：\n{replacements}\n\n" +
+                    "修改前会在原卡旁生成带时间戳的独立备份。备份永不自动删除。\n是否修改这张卡？",
+                    "备份并修复卡片 GUID？", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (result != MessageBoxResult.Yes)
+                {
+                    vm.DismissCardGuidRepair(plan);
+                    declined++;
+                    continue;
+                }
+
+                var (success, _, error) = await vm.ConfirmCardGuidRepairAsync(plan);
+                if (success)
+                    repaired++;
+                else
+                    errors.Add($"{plan.Path}\n{error}");
             }
-            var (modified, copied, failed) = await vm.ConfirmGuidRepairAsync();
-            MessageBox.Show(this,
-                $"已修改 {modified} 个源文件，复制 {copied} 个 zipmod" +
-                (failed > 0 ? $"，失败 {failed} 个（详见 error.log）" : "。"),
-                "GUID 修复完成", MessageBoxButton.OK,
-                failed > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+
+            var summary = $"已修复 {repaired} 张卡，跳过 {declined} 张；所有已创建的备份均已保留。";
+            if (errors.Count > 0)
+                summary += $"\n\n失败 {errors.Count} 张：\n{string.Join("\n\n", errors)}";
+            MessageBox.Show(this, summary, "卡片 GUID 修复完成", MessageBoxButton.OK,
+                errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         };
 
         vm.SimilarModMatchesRequested += (_, _) =>

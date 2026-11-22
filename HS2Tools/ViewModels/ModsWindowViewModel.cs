@@ -386,7 +386,7 @@ public partial class ModsWindowViewModel : ObservableObject
 
     /// <summary>
     /// 清理（分析阶段）：从首页分析缓存中找出 mods/unusedmods 内未被引用、不含 shader、
-    /// 且存在于当前 Sideload 数据库的文件；排除下载目录，确认后永久删除。
+    /// 且存在于当前 Sideload 数据库的文件；排除下载目录与 MyMods，确认后永久删除。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanCleanup))]
     private Task CleanupAsync()
@@ -411,10 +411,12 @@ public partial class ModsWindowViewModel : ObservableObject
             var usage = new HashSet<string>(settings.ModUsage.Keys, StringComparer.OrdinalIgnoreCase);
             var indexed = new HashSet<string>(_sideloadDb.Database.Keys, StringComparer.OrdinalIgnoreCase);
             var downloadDir = _config.GetModDownloadDir();
+            var customModsDir = Path.Combine(modsDir, ModOrganizeHelper.CustomModsDirectoryName);
             var unusedDir = Path.Combine(gamePath, "unusedmods");
             var candidates = settings.ModEntries
                 .Where(e => (IsUnderDir(e.Info.Path, modsDir) || IsUnderDir(e.Info.Path, unusedDir)) &&
                             !IsUnderDir(e.Info.Path, downloadDir) &&
+                            !IsUnderDir(e.Info.Path, customModsDir) &&
                             !usage.Contains(e.Guid) && e.Info.ShaderNames.Count == 0 && indexed.Contains(e.Guid))
                 .GroupBy(e => e.Info.Path, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
@@ -502,11 +504,10 @@ public partial class ModsWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 整理（分析阶段）：以首页「开始分析」持久化的缓存为数据源（不重扫磁盘）——
-    /// 完整 zipmod 条目（覆盖 mods/unusedmods，排除下载目录与 mods/scenemods）、
-    /// 分卡（人物/场景）引用集、卡片命中的 shader 名（映射回提供它的 mod GUID 做豁免）；
-    /// 先按去重规则裁决同 GUID 重复，再按引用与站点索引分类（有扫描记录才按站点目录归位）；
-    /// 有活可干则暂存计划并请求确认。
+    /// 整理（分析阶段）：以首页「开始分析」持久化的完整条目缓存为数据源（不重扫磁盘）。
+    /// 先按去重规则裁决同 GUID 重复，再按 Sideload 索引分类全部赢家：
+    /// 在索引中按站点目录归位，不在索引中移入 mods/MyMods。
+    /// 没有 Sideload 扫描记录时拒绝整理，避免把完整本地库误判为非索引 Mod。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanOrganize))]
     private Task OrganizeAsync()
@@ -527,25 +528,17 @@ public partial class ModsWindowViewModel : ObservableObject
                 OrganizeMessageRequested?.Invoke(this, "请先在首页运行「开始分析」");
                 return Task.CompletedTask;
             }
+            if (_sideloadDb.GetMeta() is null)
+            {
+                OrganizeMessageRequested?.Invoke(this, "请先在主窗口运行「Sideloader 更新」后再整理 Mods");
+                return Task.CompletedTask;
+            }
 
-            // 下载目录与 mods/scenemods（整理目标目录）内的文件不参与整理（缓存条目按路径过滤）
-            var downloadDir = _config.GetModDownloadDir();
-            var sceneModsDir = Path.Combine(modsDir, "scenemods");
             var entries = settings.ModEntries
-                .Where(e => !IsUnderDir(e.Info.Path, downloadDir) && !IsUnderDir(e.Info.Path, sceneModsDir))
                 .Select(e => KeyValuePair.Create(e.Guid, e.Info))
                 .ToList();
-
-            // 分卡引用集（缓存为 guid->count 字典，整理只需归属集合）
-            var charaUsage = new HashSet<string>(settings.CharaUsage.Keys, StringComparer.OrdinalIgnoreCase);
-            var sceneUsage = new HashSet<string>(settings.SceneUsage.Keys, StringComparer.OrdinalIgnoreCase);
-
-            // 有扫描记录（meta 存在）才按站点目录归位，否则站点索引不参与分类
-            var siteIndex = _sideloadDb.GetMeta() is not null ? _sideloadDb.Database : null;
-            // shader 豁免在 BuildPlan 内按条目 manifest 声明（ModInfo.ShaderNames 非空）判定
-            var plan = ModOrganizeHelper.BuildPlan(entries, charaUsage, sceneUsage, siteIndex, gamePath, modsDir);
-            if (plan.Duplicates.Count == 0 && plan.Unused.Count == 0 &&
-                plan.SceneOnly.Count == 0 && plan.SitePlaced.Count == 0)
+            var plan = ModOrganizeHelper.BuildPlan(entries, _sideloadDb.Database, gamePath, modsDir);
+            if (plan.Duplicates.Count == 0 && plan.Unlisted.Count == 0 && plan.SitePlaced.Count == 0)
             {
                 OrganizeMessageRequested?.Invoke(this, "Mods 无需整理");
                 return Task.CompletedTask;
@@ -556,12 +549,10 @@ public partial class ModsWindowViewModel : ObservableObject
             var segments = new List<string>();
             if (plan.Duplicates.Count > 0)
                 segments.Add($"{plan.Duplicates.Count} 个重复落选文件（{plan.DupGroups} 组，保留规则：版本高 → 体积大 → 日期新）移动到 duplicatemods");
-            if (plan.Unused.Count > 0)
-                segments.Add($"{plan.Unused.Count} 个未使用 Mods 移动到 unusedmods");
-            if (plan.SceneOnly.Count > 0)
-                segments.Add($"{plan.SceneOnly.Count} 个仅场景引用的 Mods 移动到 mods\\scenemods");
             if (plan.SitePlaced.Count > 0)
-                segments.Add($"{plan.SitePlaced.Count} 个 Mods 按站点目录归位/移回 mods");
+                segments.Add($"{plan.SitePlaced.Count} 个 Sideload Mods 按站点目录归位");
+            if (plan.Unlisted.Count > 0)
+                segments.Add($"{plan.Unlisted.Count} 个不在 Sideload 索引中的 Mods 移动到 mods\\{ModOrganizeHelper.CustomModsDirectoryName}");
             OrganizeConfirmationRequested?.Invoke(this,
                 $"整理 Mods 将把：{string.Join("，", segments)}" +
                 $"（基于 {scanTime:yyyy-MM-dd HH:mm} 的分析结果，如手动增删过 Mod 请先重新分析）。是否继续？");
@@ -583,7 +574,7 @@ public partial class ModsWindowViewModel : ObservableObject
         _pendingEntries = null;
 
         IsOrganizing = true;
-        var (dupMoved, unusedMoved, sceneMoved, siteMoved, failed) = (0, 0, 0, 0, 0);
+        var (dupMoved, unlistedMoved, siteMoved, failed) = (0, 0, 0, 0);
         var failedMods = new List<ModInfo>();
         try
         {
@@ -603,25 +594,12 @@ public partial class ModsWindowViewModel : ObservableObject
                         failedMods.Add(move.Mod);
                     }
                 }
-                foreach (var move in plan.Unused)
+                foreach (var move in plan.Unlisted)
                 {
                     if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
                     {
                         move.Mod.Path = newPath;
-                        unusedMoved++;
-                    }
-                    else
-                    {
-                        failed++;
-                        failedMods.Add(move.Mod);
-                    }
-                }
-                foreach (var move in plan.SceneOnly)
-                {
-                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
-                    {
-                        move.Mod.Path = newPath;
-                        sceneMoved++;
+                        unlistedMoved++;
                     }
                     else
                     {
@@ -644,8 +622,8 @@ public partial class ModsWindowViewModel : ObservableObject
                 }
             });
 
-            // LocalMods 写回以最终落点为准：仍在 mods 目录下的赢家才是本地 mod
-            // （SceneOnly/SitePlaced 的 Path 已更新；移进或留在 unusedmods 的不收录；移动失败的保留原样）
+            // LocalMods 写回以最终落点为准：mods 目录下的全部赢家都是本地 mod，
+            // 包括从 unusedmods 移入站点目录或 MyMods 的条目。
             var modsDirNow = _config.GetModsDir();
             _config.Update(s =>
             {
@@ -674,10 +652,8 @@ public partial class ModsWindowViewModel : ObservableObject
             var parts = new List<string>();
             if (dupMoved > 0)
                 parts.Add($"去重 {dupMoved}");
-            if (unusedMoved > 0)
-                parts.Add($"未使用 {unusedMoved}");
-            if (sceneMoved > 0)
-                parts.Add($"场景专用 {sceneMoved}");
+            if (unlistedMoved > 0)
+                parts.Add($"非 Sideload {unlistedMoved}");
             if (siteMoved > 0)
                 parts.Add($"站点归位 {siteMoved}");
             var summary = $"整理完成：{string.Join("、", parts)}";

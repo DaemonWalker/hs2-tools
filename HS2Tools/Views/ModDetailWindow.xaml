@@ -48,7 +48,7 @@
                 <TextBlock Grid.Row="5" Grid.Column="1" Margin="0,4" TextAlignment="Left" TextWrapping="Wrap">
                     <Hyperlink Command="{Binding OpenSideloadPageCommand}" Foreground="{DynamicResource AccentBrush}"
                                ToolTip="在默认浏览器中打开 Mod 所在目录（不会直接下载文件）">
-                        <Run Text="{Binding DisplaySideloadUrl}"/>
+                        <Run Text="{Binding DisplaySideloadUrl, Mode=OneWay}"/>
                     </Hyperlink>
                 </TextBlock>
                 <Button Grid.Row="6" Grid.Column="1" Content="在资源管理器中打开 Mod 位置"

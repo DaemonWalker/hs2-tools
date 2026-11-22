@@ -125,8 +125,9 @@ public partial class MainWindowViewModel : ObservableObject
     /// <summary>当前游戏档案（标题/路径卡片等文案绑定其 DisplayName/GameExeName）</summary>
     public GameProfile CurrentProfile => _config.CurrentProfile;
 
-    /// <summary>扫描/爬虫进行中或等待应用部分结果时禁止切游戏，避免结果落错数据源</summary>
-    private bool CanSwitchGame() => !IsScanning && !IsApplyingSimilarMatches
+    /// <summary>扫描/爬虫/卡片修复进行中或等待确认时禁止切游戏，避免结果落错数据源</summary>
+    private bool CanSwitchGame() => !IsScanning && !IsApplyingSimilarMatches && !IsRepairingCardGuids
+                                    && _pendingCardGuidRepairs is not { Count: > 0 }
                                     && SideloaderState != SideloaderUiState.Running
                                     && _pendingSideloadResult is null;
 
@@ -167,7 +168,7 @@ public partial class MainWindowViewModel : ObservableObject
         LaunchStatusText = "";
         UnusedModCount = 0;
         _pendingMoveBack = null;
-        _pendingGuidRepairs = null;
+        _pendingCardGuidRepairs = null;
         ClearSimilarModMatches();
 
         var path = _config.Settings.Current.GamePath;
@@ -261,17 +262,18 @@ public partial class MainWindowViewModel : ObservableObject
 
     // unusedmods 待移回清单（分析完成后请求确认，确认后由 ConfirmMoveBackAsync 消费）
     private List<(string Guid, ModInfo Info)>? _pendingMoveBack;
-    private List<ZipModGuidRepairPlan>? _pendingGuidRepairs;
+    private List<CardGuidRepairPlan>? _pendingCardGuidRepairs;
 
     /// <summary>请求用户确认移回 unusedmods 中被引用的 mod（View 订阅弹确认框，确认后调 <see cref="ConfirmMoveBackAsync"/>）</summary>
     public event EventHandler<string>? MoveBackConfirmationRequested;
 
-    /// <summary>仅在原始 GUID 无精确匹配时，请求确认修复 Trim 后相同的 zipmod GUID。</summary>
-    public event EventHandler<string>? GuidRepairConfirmationRequested;
+    /// <summary>仅在原始 GUID 无精确匹配时，请求逐卡确认修复 Trim 后相同的引用。</summary>
+    public event EventHandler<IReadOnlyList<CardGuidRepairPlan>>? CardGuidRepairConfirmationRequested;
 
     public string ScanButtonText => IsScanning ? "分析中..." : ScanCompleted ? "重新分析" : "开始分析";
 
-    private bool CanScan() => IsGamePathValid && !IsScanning && !IsApplyingSimilarMatches;
+    private bool CanScan() => IsGamePathValid && !IsScanning && !IsApplyingSimilarMatches && !IsRepairingCardGuids
+                              && _pendingCardGuidRepairs is not { Count: > 0 };
 
     [RelayCommand(CanExecute = nameof(CanScan))]
     private async Task ScanAsync()
@@ -284,7 +286,7 @@ public partial class MainWindowViewModel : ObservableObject
         ModScanProgress = SceneScanProgress = CharaScanProgress = "";
         UnusedModCount = 0;
         _pendingMoveBack = null;
-        _pendingGuidRepairs = null;
+        _pendingCardGuidRepairs = null;
         ClearSimilarModMatches();
 
         try
@@ -298,11 +300,13 @@ public partial class MainWindowViewModel : ObservableObject
             ScanStep = 1;
             ModScanDone = true;
 
-            var sceneUsage = await ScanPngUsageAsync(_config.GetSceneDir()!, "scene", p => SceneScanProgress = p);
+            var sceneScan = await ScanPngUsageAsync(_config.GetSceneDir()!, "scene", p => SceneScanProgress = p);
+            var sceneUsage = sceneScan.Usage;
             ScanStep = 2;
             SceneScanDone = true;
 
-            var charaUsage = await ScanPngUsageAsync(_config.GetCharaDir()!, "chara", p => CharaScanProgress = p);
+            var charaScan = await ScanPngUsageAsync(_config.GetCharaDir()!, "chara", p => CharaScanProgress = p);
+            var charaUsage = charaScan.Usage;
             ScanStep = 3;
             CharaScanDone = true;
 
@@ -318,7 +322,9 @@ public partial class MainWindowViewModel : ObservableObject
                 .Select(kv => (kv.Key, kv.Value))
                 .ToList();
 
-            _pendingGuidRepairs = ZipModGuidRepairService.BuildPlans(mods, mergedUsage.Keys);
+            _pendingCardGuidRepairs = CardGuidRepairService.BuildPlans(sceneScan.Cards, "scene", mods)
+                .Concat(CardGuidRepairService.BuildPlans(charaScan.Cards, "chara", mods))
+                .ToList();
 
             _config.Update(s =>
             {
@@ -336,11 +342,8 @@ public partial class MainWindowViewModel : ObservableObject
             if (_pendingMoveBack.Count > 0)
                 MoveBackConfirmationRequested?.Invoke(this,
                     $"发现 {_pendingMoveBack.Count} 个被角色/场景卡引用或包含 shader 的 Mod 在 unusedmods 中。\n\n是否移回 mods 目录？");
-            if (_pendingGuidRepairs.Count > 0)
-                GuidRepairConfirmationRequested?.Invoke(this,
-                    $"发现 {_pendingGuidRepairs.Count} 个 Mod 与卡片引用仅在 GUID 首尾空格上不同，且原始 GUID 均未精确匹配。\n" +
-                    $"将直接修改 {_pendingGuidRepairs.Count(p => p.DirectGuid is not null)} 个源文件，" +
-                    $"复制 {_pendingGuidRepairs.Sum(p => p.CopyGuids.Count)} 个 zipmod 以保留不同 GUID 的引用。\n\n是否修复？");
+            if (_pendingCardGuidRepairs.Count > 0)
+                CardGuidRepairConfirmationRequested?.Invoke(this, _pendingCardGuidRepairs.ToArray());
         }
         catch (Exception ex)
         {
@@ -483,80 +486,70 @@ public partial class MainWindowViewModel : ObservableObject
         return (movedPairs.Count, failed);
     }
 
-    public void DismissGuidRepair() => _pendingGuidRepairs = null;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ScanCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SwitchGameCommand))]
+    private bool _isRepairingCardGuids;
 
-    /// <summary>执行用户确认的 GUID 修复：未被引用的源直接改首个目标，其余目标复制。</summary>
-    public async Task<(int Modified, int Copied, int Failed)> ConfirmGuidRepairAsync()
+    public void DismissCardGuidRepair(CardGuidRepairPlan plan)
     {
-        if (_pendingGuidRepairs is not { } pending)
-            return (0, 0, 0);
-        _pendingGuidRepairs = null;
-        var operations = pending.Select(plan =>
+        if (_pendingCardGuidRepairs?.Remove(plan) == true && _pendingCardGuidRepairs.Count == 0)
         {
-            var info = _config.Settings.Current.LocalMods[plan.CurrentGuid];
-            return (Plan: plan, Info: info);
-        }).ToList();
-        var completed = new List<(ZipModGuidRepairPlan Plan, ModInfo Info, ZipModGuidRepairResult Result)>();
-        var failed = 0;
-        await Task.Run(() =>
-        {
-            foreach (var operation in operations)
-            {
-                if (operation.Plan.DirectGuid is { } directGuid)
-                    Execute(operation.Plan, operation.Info, directGuid, false);
-                foreach (var copyGuid in operation.Plan.CopyGuids)
-                    Execute(operation.Plan, operation.Info, copyGuid, true);
-            }
+            ScanCommand.NotifyCanExecuteChanged();
+            SwitchGameCommand.NotifyCanExecuteChanged();
+        }
+    }
 
-            void Execute(ZipModGuidRepairPlan plan, ModInfo info, string targetGuid, bool copy)
-            {
-                try
-                {
-                    var result = ZipModGuidRepairService.RewriteGuid(plan.SourcePath, targetGuid, copy);
-                    completed.Add((plan, info, result));
-                }
-                catch (Exception ex)
-                {
-                    failed++;
-                    ErrorLog.Log($"GUID 修复失败: {plan.SourcePath} -> {targetGuid}: {ex.Message}");
-                }
-            }
-        });
-
-        if (completed.Count > 0)
+    /// <summary>备份并重写一张卡，随后同步分析缓存和引用统计；备份永不自动删除。</summary>
+    public async Task<(bool Repaired, string? BackupPath, string? Error)> ConfirmCardGuidRepairAsync(
+        CardGuidRepairPlan plan)
+    {
+        if (_pendingCardGuidRepairs is null || !_pendingCardGuidRepairs.Remove(plan))
+            return (false, null, "修复计划已失效，请重新分析");
+        IsRepairingCardGuids = true;
+        try
         {
+            var (repair, parsed) = await Task.Run(() =>
+            {
+                var result = CardGuidRepairService.Repair(plan);
+                return (result, _scanner.ParsePngData(plan.Path));
+            });
+            _analysisCache?.UpsertCard(_config.Settings.CurrentGame, plan.Scope,
+                CardAnalysisEntry.FromResult(plan.Scope, parsed));
             _config.Update(s =>
             {
-                foreach (var (plan, info, result) in completed)
-                {
-                    info.FileLength = new FileInfo(result.OutputPath).Length;
-                    info.LastWriteTimeUtcTicks = File.GetLastWriteTimeUtc(result.OutputPath).Ticks;
-                    if (result.IsCopy)
-                    {
-                        var copyInfo = new ModInfo
-                        {
-                            Name = info.Name,
-                            Version = info.Version,
-                            Path = result.OutputPath,
-                            FileLength = info.FileLength,
-                            LastWriteTimeUtcTicks = info.LastWriteTimeUtcTicks,
-                            ShaderNames = new List<string>(info.ShaderNames),
-                        };
-                        s.Current.LocalMods[result.NewGuid] = copyInfo;
-                        s.Current.ModEntries.Add(new ModScanEntry { Guid = result.NewGuid, Info = copyInfo });
-                    }
-                    else
-                    {
-                        s.Current.LocalMods.Remove(plan.CurrentGuid);
-                        s.Current.LocalMods[result.NewGuid] = info;
-                        foreach (var entry in s.Current.ModEntries.Where(e =>
-                                     e.Info.Path.Equals(result.SourcePath, StringComparison.OrdinalIgnoreCase)))
-                            entry.Guid = result.NewGuid;
-                    }
-                }
+                var usage = plan.Scope == "scene" ? s.Current.SceneUsage : s.Current.CharaUsage;
+                UpdateUsage(usage, plan.OriginalModIds, -1);
+                UpdateUsage(usage, parsed.ModIDs, 1);
+                var merged = new Dictionary<string, int>(s.Current.SceneUsage);
+                foreach (var (guid, count) in s.Current.CharaUsage)
+                    merged[guid] = count;
+                s.Current.ModUsage = merged;
             });
+            RebuildSimilarModMatches();
+            return (true, repair.BackupPath, null);
         }
-        return (completed.Count(r => !r.Result.IsCopy), completed.Count(r => r.Result.IsCopy), failed);
+        catch (Exception ex)
+        {
+            ErrorLog.Log($"卡片 GUID 修复失败: {plan.Path}: {ex.Message}");
+            return (false, null, ex.Message);
+        }
+        finally
+        {
+            IsRepairingCardGuids = false;
+        }
+    }
+
+    private static void UpdateUsage(Dictionary<string, int> usage, IEnumerable<string> modIds, int delta)
+    {
+        foreach (var modId in modIds)
+        {
+            var count = usage.TryGetValue(modId, out var current) ? current + delta : delta;
+            if (count > 0)
+                usage[modId] = count;
+            else
+                usage.Remove(modId);
+        }
     }
 
     // ==================== 相近 GUID 匹配（仅精确本地/Sideload 均未命中时生成） ====================
@@ -713,7 +706,8 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>阶段 2/3：扫描 PNG 目录并统计 Mod 引用次数，未变化卡片直接复用缓存。</summary>
-    private async Task<Dictionary<string, int>> ScanPngUsageAsync(string dir, string scope, Action<string> report)
+    private async Task<(Dictionary<string, int> Usage, List<PngParseResult> Cards)> ScanPngUsageAsync(
+        string dir, string scope, Action<string> report)
     {
         var files = _scanner.ScanDirectory(dir, new ScanOptions { TargetExtension = { ".png" } })
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
@@ -723,6 +717,7 @@ public partial class MainWindowViewModel : ObservableObject
         var cached = _analysisCache?.GetCards(gameId, scope) ?? new(StringComparer.OrdinalIgnoreCase);
         var validated = new System.Collections.Concurrent.ConcurrentDictionary<string, CardAnalysisEntry>(StringComparer.OrdinalIgnoreCase);
         var cacheEntries = new List<CardAnalysisEntry>(files.Count);
+        var cards = new List<PngParseResult>(files.Count);
         var usage = new Dictionary<string, int>();
         for (var i = 0; i < files.Count; i += BatchSize)
         {
@@ -740,6 +735,7 @@ public partial class MainWindowViewModel : ObservableObject
                 });
             foreach (var item in batchResults.OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
             {
+                cards.Add(item);
                 foreach (var modId in item.ModIDs)
                     usage[modId] = usage.TryGetValue(modId, out var c) ? c + 1 : 1;
                 if (_analysisCache is not null)
@@ -751,7 +747,7 @@ public partial class MainWindowViewModel : ObservableObject
         }
         if (_analysisCache is not null)
             await Task.Run(() => _analysisCache.ReplaceCards(gameId, scope, cacheEntries));
-        return usage;
+        return (usage, cards);
     }
 
     private static void LogScanError(string message) => App.LogException(new Exception(message));

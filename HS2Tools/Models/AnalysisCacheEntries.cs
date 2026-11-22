@@ -9,6 +9,7 @@ public class CardAnalysisEntry
     public List<string> Names { get; set; } = new();
     public List<string> ModIDs { get; set; } = new();
     public int GameDataLen { get; set; }
+    public bool StructuralOk { get; set; }
 
     public PngParseResult ToResult() => new()
     {
@@ -16,6 +17,7 @@ public class CardAnalysisEntry
         CharaNames = new List<string>(Names),
         ModIDs = new List<string>(ModIDs),
         GameDataLen = GameDataLen,
+        StructuralOk = StructuralOk,
         FileLength = FileLength,
         LastWriteTimeUtcTicks = LastWriteTimeUtcTicks,
     };
@@ -29,6 +31,7 @@ public class CardAnalysisEntry
         Names = result.CharaNames,
         ModIDs = result.ModIDs,
         GameDataLen = result.GameDataLen,
+        StructuralOk = result.StructuralOk,
     };
 }
 

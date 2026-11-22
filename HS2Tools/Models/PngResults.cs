@@ -11,6 +11,7 @@ public class PngParseResult
     public int ImageLength { get; set; }
     public long FileLength { get; set; }
     public long LastWriteTimeUtcTicks { get; set; }
+    public bool StructuralOk { get; set; }
 }
 
 /// <summary>单个 PNG 文件的 Mod 结果</summary>
