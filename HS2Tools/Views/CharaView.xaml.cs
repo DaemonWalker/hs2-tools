@@ -20,7 +20,7 @@ public partial class CharaView : UserControl
         if (App.Services is not { } s)
             return;
 
-        var vm = new CharaWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher, s.AnalysisCache);
+        var vm = new CharaWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher, s.AnalysisCache, s.ModDetails);
         DataContext = vm;
         vm.LoadCardPaths();
     }

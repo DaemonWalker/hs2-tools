@@ -108,6 +108,36 @@ public class ModsWindowViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Search_MatchesGuidNamePathAndSideloadUrl()
+    {
+        using var config = new ConfigService(_dir);
+        config.Update(s =>
+        {
+            s.Current.LocalMods["guid-alpha"] = new ModInfo { Name = "Hair Pack", Path = @"C:\mods\alpha.zipmod" };
+            s.Current.LocalMods["guid-beta"] = new ModInfo { Name = "Clothes", Path = @"D:\library\beta.zipmod" };
+        });
+        var db = new SideloadDatabaseService(config);
+        db.Update(new Dictionary<string, string> { ["guid-beta"] = "https://example.com/download/beta.zipmod" });
+        var vm = new ModsWindowViewModel(config, new ScannerService(), db);
+
+        vm.SearchText = "GUID-ALPHA";
+        Assert.Equal("guid-alpha", Assert.Single(vm.Mods).Guid);
+        vm.SearchText = "hair pack";
+        Assert.Equal("guid-alpha", Assert.Single(vm.Mods).Guid);
+        vm.SearchText = @"d:\library";
+        Assert.Equal("guid-beta", Assert.Single(vm.Mods).Guid);
+        vm.SearchText = "download/beta";
+        Assert.Equal("guid-beta", Assert.Single(vm.Mods).Guid);
+
+        vm.SearchText = "not-found";
+        Assert.True(vm.IsEmpty);
+        Assert.Equal("没有符合搜索条件的 Mods", vm.EmptyText);
+
+        db.Update(new Dictionary<string, string> { ["guid-alpha"] = "https://example.com/not-found.zipmod" });
+        Assert.Equal("guid-alpha", Assert.Single(vm.Mods).Guid);
+    }
+
+    [Fact]
     public void Empty_NoLocalMods_ShowsHint()
     {
         using var config = new ConfigService(_dir);

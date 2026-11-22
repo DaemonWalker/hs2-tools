@@ -26,6 +26,11 @@ public partial class MainWindow : Window
             services.GameLauncher, services.SideloadDb, services.CreateSideloader, services.AnalysisCache);
         DataContext = vm;
         SubscribeConfirmations(vm);
+        services.ModDetails.Requested += (_, detail) =>
+        {
+            var dialog = new ModDetailWindow { Owner = this, DataContext = detail };
+            dialog.Show();
+        };
 
         services.Pages.Navigated += (_, _) => PageHost.Content = services.Pages.CurrentPage;
         NavHome.IsChecked = true;

@@ -38,29 +38,34 @@
         </UniformGrid>
 
         <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,16" Padding="12">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Border Background="{DynamicResource WindowBackgroundBrush}" CornerRadius="7" Padding="2"
-                        HorizontalAlignment="Left">
-                    <StackPanel Orientation="Horizontal">
-                        <RadioButton Content="全部模组" GroupName="ModFilter" IsChecked="True"
-                                     Style="{StaticResource SegmentedRadioButton}"/>
-                        <RadioButton Content="未使用" GroupName="ModFilter"
-                                     IsChecked="{Binding ShowUnusedOnly, Mode=TwoWay}"
-                                     Style="{StaticResource SegmentedRadioButton}"/>
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Background="{DynamicResource WindowBackgroundBrush}" CornerRadius="7" Padding="2"
+                            HorizontalAlignment="Left">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Content="全部模组" GroupName="ModFilter" IsChecked="True"
+                                         Style="{StaticResource SegmentedRadioButton}"/>
+                            <RadioButton Content="未使用" GroupName="ModFilter"
+                                         IsChecked="{Binding ShowUnusedOnly, Mode=TwoWay}"
+                                         Style="{StaticResource SegmentedRadioButton}"/>
+                        </StackPanel>
+                    </Border>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}"/>
+                        <Button Content="{Binding DedupButtonText}" Command="{Binding DedupCommand}" Margin="8,0,0,0"/>
+                        <Button Content="{Binding CleanupButtonText}" Command="{Binding CleanupCommand}" Margin="8,0,0,0"/>
+                        <Button Content="{Binding OrganizeButtonText}" Command="{Binding OrganizeCommand}"
+                                Style="{StaticResource PrimaryButton}" Margin="8,0,0,0"/>
                     </StackPanel>
-                </Border>
-                <StackPanel Grid.Column="1" Orientation="Horizontal">
-                    <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}"/>
-                    <Button Content="{Binding DedupButtonText}" Command="{Binding DedupCommand}" Margin="8,0,0,0"/>
-                    <Button Content="{Binding CleanupButtonText}" Command="{Binding CleanupCommand}" Margin="8,0,0,0"/>
-                    <Button Content="{Binding OrganizeButtonText}" Command="{Binding OrganizeCommand}"
-                            Style="{StaticResource PrimaryButton}" Margin="8,0,0,0"/>
-                </StackPanel>
-            </Grid>
+                </Grid>
+                <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                         Tag="搜索 GUID、名称、文件路径或 Sideload URL"
+                         AutomationProperties.Name="搜索本地模组" Margin="0,12,0,0"/>
+            </StackPanel>
         </Border>
 
         <Grid Grid.Row="3">
@@ -68,12 +73,26 @@
                       AutoGenerateColumns="False" IsReadOnly="True"
                       EnableRowVirtualization="True" EnableColumnVirtualization="True"
                       GridLinesVisibility="Horizontal" HeadersVisibility="Column">
+                <DataGrid.InputBindings>
+                    <MouseBinding MouseAction="LeftDoubleClick"
+                                  Command="{Binding ShowModDetailCommand}"
+                                  CommandParameter="{Binding SelectedItem, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
+                </DataGrid.InputBindings>
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="GUID" Binding="{Binding Guid}" Width="280" SortMemberPath="Guid"/>
                     <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="220" SortMemberPath="Name"/>
                     <DataGridTextColumn Header="版本" Binding="{Binding Version}" Width="90" SortMemberPath="Version"/>
                     <DataGridTextColumn Header="使用次数" Binding="{Binding UsedCount}" Width="90" SortMemberPath="UsedCount"/>
                     <DataGridTextColumn Header="路径" Binding="{Binding Path}" Width="*" SortMemberPath="Path"/>
+                    <DataGridTemplateColumn Header="操作" Width="72">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button Content="详情" Padding="8,3" MinHeight="28"
+                                        Command="{Binding DataContext.ShowModDetailCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                        CommandParameter="{Binding}"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                 </DataGrid.Columns>
             </DataGrid>
             <TextBlock Text="{Binding EmptyText}" FontSize="14" TextWrapping="Wrap"

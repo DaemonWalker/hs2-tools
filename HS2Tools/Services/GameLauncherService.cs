@@ -47,6 +47,19 @@ public class GameLauncherService
         });
     }
 
+    /// <summary>在系统默认浏览器中打开 HTTP/HTTPS 查看页面。</summary>
+    public void OpenWebPage(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new InvalidOperationException("无效的网页地址");
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = uri.AbsoluteUri,
+            UseShellExecute = true,
+        });
+    }
+
     // ==================== 防休眠（替代原版 F15 按键 hack） ====================
 
     private const uint ES_CONTINUOUS = 0x80000000;

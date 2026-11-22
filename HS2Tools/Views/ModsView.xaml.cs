@@ -20,7 +20,7 @@ public partial class ModsView : UserControl
         if (App.Services is not { } s)
             return;
 
-        var vm = new ModsWindowViewModel(s.Config, s.Scanner, s.SideloadDb);
+        var vm = new ModsWindowViewModel(s.Config, s.Scanner, s.SideloadDb, s.ModDetails);
         var owner = Window.GetWindow(this);
 
         vm.DedupConfirmationRequested += (_, msg) =>

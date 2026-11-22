@@ -33,13 +33,16 @@ public partial class CardExplorerViewModel : ObservableObject
     private readonly ConfigService _config;
     private readonly ScannerService _scanner;
     private readonly AnalysisCacheService? _analysisCache;
+    private readonly ModDetailService? _modDetails;
     private int _loadVersion;
 
-    public CardExplorerViewModel(ConfigService config, ScannerService scanner, AnalysisCacheService? analysisCache = null)
+    public CardExplorerViewModel(ConfigService config, ScannerService scanner, AnalysisCacheService? analysisCache = null,
+        ModDetailService? modDetails = null)
     {
         _config = config;
         _scanner = scanner;
         _analysisCache = analysisCache;
+        _modDetails = modDetails;
 
         // 扫描完成（LocalMods 变化）→ 刷新"已拥有"标记（单例服务与窗口同寿，无需退订）
         _config.Changed += (_, _) => UiDispatch.Run(RefreshModLocalState);
@@ -228,6 +231,10 @@ public partial class CardExplorerViewModel : ObservableObject
         IsLoading = false;
         ErrorMessage = null;
     }
+
+    /// <summary>从卡片依赖项打开 Mod 详情。</summary>
+    [RelayCommand]
+    private void ShowModDetail(CardExplorerModItem item) => _modDetails?.Show(item.Guid);
 
     /// <summary>选择 PNG 文件（默认目录 = 游戏角色/场景目录，存在才设——对应原版 dirExists 检查）</summary>
     [RelayCommand]

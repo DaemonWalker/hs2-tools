@@ -16,6 +16,7 @@ public class ServiceContainer : IDisposable
         Downloads = new DownloadManager(Config.GetProxyString);
         GameLauncher = new GameLauncherService(Config);
         SideloadDb = new SideloadDatabaseService(Config);
+        ModDetails = new ModDetailService(Config, SideloadDb, GameLauncher);
         Pages = new PageManager();
     }
 
@@ -25,6 +26,7 @@ public class ServiceContainer : IDisposable
     public DownloadManager Downloads { get; }
     public GameLauncherService GameLauncher { get; }
     public SideloadDatabaseService SideloadDb { get; }
+    public ModDetailService ModDetails { get; }
     public PageManager Pages { get; }
 
     /// <summary>

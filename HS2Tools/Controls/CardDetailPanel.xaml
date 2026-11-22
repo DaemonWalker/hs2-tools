@@ -110,8 +110,13 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding Guid}" VerticalAlignment="Center" Margin="0,0,8,0"
-                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Guid}" FontSize="12"/>
+                                <Button VerticalAlignment="Center" HorizontalAlignment="Left" Margin="0,0,8,0" Padding="0"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                        HorizontalContentAlignment="Left" ToolTip="查看 Mod 详情"
+                                        Command="{Binding DataContext.ShowModDetailCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                        CommandParameter="{Binding}">
+                                    <TextBlock Text="{Binding Guid}" TextTrimming="CharacterEllipsis" TextAlignment="Left" FontSize="12"/>
+                                </Button>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                     <StackPanel.Style>
                                         <Style TargetType="StackPanel">

@@ -13,6 +13,7 @@ public partial class ModItemViewModel : ObservableObject
     public required string Name { get; init; }
     public required string Version { get; init; }
     public required string Path { get; init; }
+    public string SideloadUrl { get; init; } = "";
 
     /// <summary>使用次数（与 ModUsage 大小写不敏感匹配）</summary>
     public required int UsedCount { get; init; }
@@ -29,18 +30,22 @@ public partial class ModsWindowViewModel : ObservableObject
     private readonly ConfigService _config;
     private readonly ScannerService _scanner;
     private readonly SideloadDatabaseService _sideloadDb;
+    private readonly ModDetailService? _modDetails;
     private List<ModItemViewModel> _all = new();
 
-    public ModsWindowViewModel(ConfigService config, ScannerService scanner, SideloadDatabaseService sideloadDb)
+    public ModsWindowViewModel(ConfigService config, ScannerService scanner, SideloadDatabaseService sideloadDb,
+        ModDetailService? modDetails = null)
     {
         _config = config;
         _scanner = scanner;
         _sideloadDb = sideloadDb;
+        _modDetails = modDetails;
 
         Reload();
         Mods.CollectionChanged += (_, _) => OnPropertyChanged(nameof(IsEmpty));
         // 其他窗口完成分析/修改配置后列表自行刷新（单例服务与窗口同寿，无需退订）
         _config.Changed += (_, _) => UiDispatch.Run(Reload);
+        _sideloadDb.Changed += (_, _) => UiDispatch.Run(Reload);
     }
 
     /// <summary>筛选后的展示行（DataGrid 负责点击列排序/虚拟化）</summary>
@@ -54,6 +59,10 @@ public partial class ModsWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmptyText))]
     private bool _showUnusedOnly;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EmptyText))]
+    private string _searchText = "";
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
@@ -134,9 +143,12 @@ public partial class ModsWindowViewModel : ObservableObject
         ? "正在扫描本地 Mods..."
         : ModCount == 0
             ? "暂无本地 Mods，请先设置游戏目录并点击「刷新模组列表」"
-            : "没有未使用的 Mods";
+            : !string.IsNullOrWhiteSpace(SearchText)
+                ? "没有符合搜索条件的 Mods"
+                : "没有未使用的 Mods";
 
     partial void OnShowUnusedOnlyChanged(bool value) => ApplyFilter();
+    partial void OnSearchTextChanged(string value) => ApplyFilter();
 
     /// <summary>从 Config.Settings 重建主列表与统计（对应原版 useMemo(mods/useage)）</summary>
     private void Reload()
@@ -156,6 +168,7 @@ public partial class ModsWindowViewModel : ObservableObject
                 Name = kv.Value.Name,
                 Version = kv.Value.Version,
                 Path = kv.Value.Path,
+                SideloadUrl = _sideloadDb.Database.TryGetValue(kv.Key, out var url) ? url : "",
                 UsedCount = usage.TryGetValue(kv.Key, out var c) ? c : 0, // 原版 getUsageCount：未命中为 0
             })
             // 原版排序：guid → version → path（localeCompare）
@@ -176,11 +189,28 @@ public partial class ModsWindowViewModel : ObservableObject
     private void ApplyFilter()
     {
         Mods.Clear();
+        var query = SearchText.Trim();
         foreach (var item in _all)
         {
-            if (!ShowUnusedOnly || item.UsedCount == 0)
-                Mods.Add(item);
+            if (ShowUnusedOnly && item.UsedCount != 0)
+                continue;
+            if (query.Length > 0 &&
+                !item.Guid.Contains(query, StringComparison.OrdinalIgnoreCase) &&
+                !item.Name.Contains(query, StringComparison.OrdinalIgnoreCase) &&
+                !item.Path.Contains(query, StringComparison.OrdinalIgnoreCase) &&
+                !item.SideloadUrl.Contains(query, StringComparison.OrdinalIgnoreCase))
+                continue;
+            Mods.Add(item);
         }
+        OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(EmptyText));
+    }
+
+    [RelayCommand]
+    private void ShowModDetail(ModItemViewModel? item)
+    {
+        if (item is not null)
+            _modDetails?.Show(item.Guid);
     }
 
     private bool CanRefresh() => !IsRefreshing && !IsDeduping && !IsCleaning && !IsOrganizing;

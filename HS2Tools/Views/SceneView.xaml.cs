@@ -20,7 +20,7 @@ public partial class SceneView : UserControl
         if (App.Services is not { } s)
             return;
 
-        var vm = new SceneWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher, s.AnalysisCache);
+        var vm = new SceneWindowViewModel(s.Config, s.Scanner, s.Downloads, s.SideloadDb, s.GameLauncher, s.AnalysisCache, s.ModDetails);
         DataContext = vm;
         vm.LoadCardPaths();
     }

@@ -24,7 +24,7 @@ HS2-Tools 是一个基于 **.NET 10 + WPF** 的桌面应用，用于管理 Honey
 ```
 HS2Tools/
 ├── Services/      # 核心服务单例（Config/Scanner+CharaCardParser/AnalysisCache/Downloader+DownloadManager/
-│                  #   Sideloader/SideloadDatabase/GameLauncher/ErrorLog），与 UI 解耦可单测
+│                  #   Sideloader/SideloadDatabase/ModDetail/GameLauncher/ErrorLog），与 UI 解耦可单测
 ├── Models/        # AppSettings（含 per-game GameData）/ GameProfiles 静态注册表
 ├── ViewModels/    # 每页一个 VM（+ 共用 CardDetailViewModel）
 ├── Views/         # MainWindow 单窗口主壳 + HomeView/7 个功能页面（PageManager 缓存保状态）

@@ -1,0 +1,82 @@
+<Window x:Class="HS2Tools.Views.ModDetailWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Mod 详情" Width="900" Height="720" MinWidth="720" MinHeight="560"
+        WindowStartupLocation="CenterOwner" Background="{DynamicResource WindowBackgroundBrush}">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="{Binding DisplayName}" Style="{StaticResource PageTitle}" TextWrapping="Wrap"/>
+            <TextBlock Text="本地文件信息与 manifest.xml 原文" Style="{StaticResource PageSubtitle}"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,16,0,16" Padding="16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="96"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="GUID" Foreground="{DynamicResource SecondaryForegroundBrush}" Margin="0,4"/>
+                <TextBox Grid.Column="1" Text="{Binding Guid, Mode=OneWay}" IsReadOnly="True" MinHeight="0" Padding="0" VerticalContentAlignment="Top" BorderThickness="0"
+                         Background="Transparent" TextWrapping="Wrap" Margin="0,4"/>
+                <TextBlock Grid.Row="1" Text="版本" Foreground="{DynamicResource SecondaryForegroundBrush}" Margin="0,4"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DisplayVersion}" Margin="0,4"/>
+                <TextBlock Grid.Row="2" Text="文件大小" Foreground="{DynamicResource SecondaryForegroundBrush}" Margin="0,4"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding FileSize}" Margin="0,4"/>
+                <TextBlock Grid.Row="3" Text="修改时间" Foreground="{DynamicResource SecondaryForegroundBrush}" Margin="0,4"/>
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Modified}" Margin="0,4"/>
+                <TextBlock Grid.Row="4" Text="文件路径" Foreground="{DynamicResource SecondaryForegroundBrush}" Margin="0,4"/>
+                <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding DisplayFilePath, Mode=OneWay}" IsReadOnly="True"
+                         MinHeight="0" Padding="0" VerticalContentAlignment="Top"
+                         BorderThickness="0" Background="Transparent" TextWrapping="Wrap" Margin="0,4"/>
+                <TextBlock Grid.Row="5" Text="Sideload URL" Foreground="{DynamicResource SecondaryForegroundBrush}" Margin="0,4"/>
+                <TextBlock Grid.Row="5" Grid.Column="1" Margin="0,4" TextAlignment="Left" TextWrapping="Wrap">
+                    <Hyperlink Command="{Binding OpenSideloadPageCommand}" Foreground="{DynamicResource AccentBrush}"
+                               ToolTip="在默认浏览器中打开 Mod 所在目录（不会直接下载文件）">
+                        <Run Text="{Binding DisplaySideloadUrl}"/>
+                    </Hyperlink>
+                </TextBlock>
+                <Button Grid.Row="6" Grid.Column="1" Content="在资源管理器中打开 Mod 位置"
+                        Command="{Binding OpenInFolderCommand}" HorizontalAlignment="Left" Margin="0,10,0,0"/>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="manifest.xml" Style="{StaticResource SectionTitle}" Margin="16,14,16,10"/>
+                <TextBox Grid.Row="1" Text="{Binding ManifestText}" IsReadOnly="True"
+                         AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" FontSize="12" BorderThickness="0" Padding="12,8"
+                         Background="{DynamicResource WindowBackgroundBrush}" Margin="4,0,4,4"/>
+                <ProgressBar Grid.Row="1" Width="180" Height="4" IsIndeterminate="True"
+                             Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}"/>
+                <TextBlock Grid.Row="1" Text="{Binding ErrorMessage}" TextWrapping="Wrap" Margin="32"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Foreground="{DynamicResource WarningBrush}"
+                           Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}"/>
+            </Grid>
+        </Border>
+
+        <Button Grid.Row="3" Content="关闭" HorizontalAlignment="Right" Margin="0,16,0,0" Click="CloseButton_Click"/>
+    </Grid>
+</Window>

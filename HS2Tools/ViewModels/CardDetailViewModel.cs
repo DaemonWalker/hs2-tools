@@ -60,6 +60,7 @@ public partial class CardDetailViewModel : ObservableObject
     private readonly GameLauncherService _launcher;
     private readonly AnalysisCacheService? _analysisCache;
     private readonly string? _analysisScope;
+    private readonly ModDetailService? _modDetails;
 
     public CardDetailViewModel(
         ConfigService config,
@@ -68,7 +69,8 @@ public partial class CardDetailViewModel : ObservableObject
         SideloadDatabaseService sideloadDb,
         GameLauncherService launcher,
         AnalysisCacheService? analysisCache = null,
-        string? analysisScope = null)
+        string? analysisScope = null,
+        ModDetailService? modDetails = null)
     {
         _config = config;
         _scanner = scanner;
@@ -77,6 +79,7 @@ public partial class CardDetailViewModel : ObservableObject
         _launcher = launcher;
         _analysisCache = analysisCache;
         _analysisScope = analysisScope;
+        _modDetails = modDetails;
 
         // 下载进度/完成 → 详情列表对应项状态刷新（单例服务与窗口同寿，无需退订）
         _downloads.TaskProgress += (_, t) => UiDispatch.Run(() => UpdateItemStatus(t));
@@ -204,6 +207,10 @@ public partial class CardDetailViewModel : ObservableObject
         foreach (var item in ModItems.Where(i => i.ShowDownload).ToList())
             DownloadMod(item);
     }
+
+    /// <summary>打开本地 Mod 详情；缺失项也会显示 GUID 与可用的 Sideload 地址。</summary>
+    [RelayCommand]
+    private void ShowModDetail(DetailModItem item) => _modDetails?.Show(item.Guid);
 
     /// <summary>打开所在文件夹（explorer /select,）</summary>
     [RelayCommand]
