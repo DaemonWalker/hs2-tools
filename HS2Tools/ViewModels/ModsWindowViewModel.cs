@@ -22,8 +22,8 @@ public partial class ModItemViewModel : ObservableObject
 /// <summary>
 /// 本地模组窗口 ViewModel（对应原版 Mods/LocalMods.tsx）：
 /// 统计三卡（本地 Mods 总数 / 被引用 Mods 数 / 总引用次数，与首页数据概览同口径）、
-/// 所有/未使用筛选、刷新重扫 mods 目录 zipmod。
-/// 去重/整理/清理不重扫磁盘，以首页「开始分析」持久化的缓存（ModEntries/CharaUsage/SceneUsage）为数据源。
+/// 所有/未使用/GUID 可能重复筛选、刷新重扫 mods 目录 zipmod。
+/// GUID 重复检测与去重/整理/清理不重扫磁盘，以首页「开始分析」持久化的缓存（ModEntries/CharaUsage/SceneUsage）为数据源。
 /// </summary>
 public partial class ModsWindowViewModel : ObservableObject
 {
@@ -32,6 +32,7 @@ public partial class ModsWindowViewModel : ObservableObject
     private readonly SideloadDatabaseService _sideloadDb;
     private readonly ModDetailService? _modDetails;
     private List<ModItemViewModel> _all = new();
+    private List<ModItemViewModel> _analysisMods = new();
 
     public ModsWindowViewModel(ConfigService config, ScannerService scanner, SideloadDatabaseService sideloadDb,
         ModDetailService? modDetails = null)
@@ -59,6 +60,11 @@ public partial class ModsWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmptyText))]
     private bool _showUnusedOnly;
+
+    /// <summary>只显示完整分析结果中 Trim 后 GUID 相同（不区分大小写）的 Mods；空白 GUID 不参与分组</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EmptyText))]
+    private bool _showDuplicateGuidsOnly;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(EmptyText))]
@@ -141,13 +147,18 @@ public partial class ModsWindowViewModel : ObservableObject
 
     public string EmptyText => IsRefreshing
         ? "正在扫描本地 Mods..."
-        : ModCount == 0
-            ? "暂无本地 Mods，请先设置游戏目录并点击「刷新模组列表」"
-            : !string.IsNullOrWhiteSpace(SearchText)
-                ? "没有符合搜索条件的 Mods"
-                : "没有未使用的 Mods";
+        : ShowDuplicateGuidsOnly && _config.Settings.Current.LastAnalysisTime is null
+            ? "请先在首页运行「开始分析」以检测 GUID 冲突"
+            : ModCount == 0
+                ? "暂无本地 Mods，请先设置游戏目录并点击「刷新模组列表」"
+                : !string.IsNullOrWhiteSpace(SearchText)
+                    ? "没有符合搜索条件的 Mods"
+                    : ShowDuplicateGuidsOnly
+                        ? "没有发现可能重复的 GUID"
+                        : "没有未使用的 Mods";
 
     partial void OnShowUnusedOnlyChanged(bool value) => ApplyFilter();
+    partial void OnShowDuplicateGuidsOnlyChanged(bool value) => ApplyFilter();
     partial void OnSearchTextChanged(string value) => ApplyFilter();
 
     /// <summary>从 Config.Settings 重建主列表与统计（对应原版 useMemo(mods/useage)）</summary>
@@ -161,20 +172,29 @@ public partial class ModsWindowViewModel : ObservableObject
         foreach (var (guid, count) in settings.ModUsage)
             usage[guid] = count;
 
-        _all = settings.LocalMods
-            .Select(kv => new ModItemViewModel
-            {
-                Guid = kv.Key,
-                Name = kv.Value.Name,
-                Version = kv.Value.Version,
-                Path = kv.Value.Path,
-                SideloadUrl = _sideloadDb.Database.TryGetValue(kv.Key, out var url) ? url : "",
-                UsedCount = usage.TryGetValue(kv.Key, out var c) ? c : 0, // 原版 getUsageCount：未命中为 0
-            })
+        ModItemViewModel CreateRow(string guid, ModInfo info) => new()
+        {
+            Guid = guid,
+            Name = info.Name,
+            Version = info.Version,
+            Path = info.Path,
+            SideloadUrl = _sideloadDb.Database.TryGetValue(guid, out var url) ? url : "",
+            UsedCount = usage.TryGetValue(guid, out var c) ? c : 0, // 原版 getUsageCount：未命中为 0
+        };
+
+        IOrderedEnumerable<ModItemViewModel> SortRows(IEnumerable<ModItemViewModel> rows) => rows
             // 原版排序：guid → version → path（localeCompare）
             .OrderBy(m => m.Guid, StringComparer.OrdinalIgnoreCase)
             .ThenBy(m => m.Version, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(m => m.Path, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(m => m.Path, StringComparer.OrdinalIgnoreCase);
+
+        _all = SortRows(settings.LocalMods.Select(kv => CreateRow(kv.Key, kv.Value))).ToList();
+
+        // LocalMods 会折叠仅大小写不同的 GUID；冲突检测必须保留分析时的全部文件条目。
+        var modsDir = _config.GetModsDir();
+        _analysisMods = SortRows(settings.ModEntries
+            .Where(e => IsUnderDir(e.Info.Path, modsDir))
+            .Select(e => CreateRow(e.Guid, e.Info)))
             .ToList();
 
         // 统计口径与首页数据概览一致（Config.Settings 直取）
@@ -190,9 +210,20 @@ public partial class ModsWindowViewModel : ObservableObject
     {
         Mods.Clear();
         var query = SearchText.Trim();
-        foreach (var item in _all)
+        var duplicateGuids = ShowDuplicateGuidsOnly
+            ? _analysisMods.Select(m => m.Guid.Trim())
+                .Where(guid => guid.Length > 0)
+                .GroupBy(guid => guid, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1)
+                .Select(group => group.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+        var source = ShowDuplicateGuidsOnly ? _analysisMods : _all;
+        foreach (var item in source)
         {
             if (ShowUnusedOnly && item.UsedCount != 0)
+                continue;
+            if (duplicateGuids is not null && !duplicateGuids.Contains(item.Guid.Trim()))
                 continue;
             if (query.Length > 0 &&
                 !item.Guid.Contains(query, StringComparison.OrdinalIgnoreCase) &&
@@ -505,8 +536,8 @@ public partial class ModsWindowViewModel : ObservableObject
 
     /// <summary>
     /// 整理（分析阶段）：以首页「开始分析」持久化的完整条目缓存为数据源（不重扫磁盘）。
-    /// 先按去重规则裁决同 GUID 重复，再按 Sideload 索引分类全部赢家：
-    /// 在索引中按站点目录归位，不在索引中移入 mods/MyMods。
+    /// 先按去重规则裁决同 GUID 重复，再按 Sideload 索引与使用状态分类全部赢家：
+    /// 在索引中按站点目录归位；未收录且在用移入 mods/MyMods；未收录且未使用移入 unusedmods 并改名为 .zipmod_。
     /// 没有 Sideload 扫描记录时拒绝整理，避免把完整本地库误判为非索引 Mod。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanOrganize))]
@@ -537,7 +568,8 @@ public partial class ModsWindowViewModel : ObservableObject
             var entries = settings.ModEntries
                 .Select(e => KeyValuePair.Create(e.Guid, e.Info))
                 .ToList();
-            var plan = ModOrganizeHelper.BuildPlan(entries, _sideloadDb.Database, gamePath, modsDir);
+            var usedGuids = new HashSet<string>(settings.ModUsage.Keys, StringComparer.OrdinalIgnoreCase);
+            var plan = ModOrganizeHelper.BuildPlan(entries, _sideloadDb.Database, usedGuids, gamePath, modsDir);
             if (plan.Duplicates.Count == 0 && plan.Unlisted.Count == 0 && plan.SitePlaced.Count == 0)
             {
                 OrganizeMessageRequested?.Invoke(this, "Mods 无需整理");
@@ -551,8 +583,14 @@ public partial class ModsWindowViewModel : ObservableObject
                 segments.Add($"{plan.Duplicates.Count} 个重复落选文件（{plan.DupGroups} 组，保留规则：版本高 → 体积大 → 日期新）移动到 duplicatemods");
             if (plan.SitePlaced.Count > 0)
                 segments.Add($"{plan.SitePlaced.Count} 个 Sideload Mods 按站点目录归位");
-            if (plan.Unlisted.Count > 0)
-                segments.Add($"{plan.Unlisted.Count} 个不在 Sideload 索引中的 Mods 移动到 mods\\{ModOrganizeHelper.CustomModsDirectoryName}");
+            var disabledCount = plan.Unlisted.Count(move =>
+                string.Equals(Path.GetExtension(move.TargetFileName), ModOrganizeHelper.DisabledZipmodExtension,
+                    StringComparison.OrdinalIgnoreCase));
+            var activeUnlistedCount = plan.Unlisted.Count - disabledCount;
+            if (activeUnlistedCount > 0)
+                segments.Add($"{activeUnlistedCount} 个使用中且不在 Sideload 索引中的 Mods 移动到 mods\\{ModOrganizeHelper.CustomModsDirectoryName}");
+            if (disabledCount > 0)
+                segments.Add($"{disabledCount} 个未使用且不在 Sideload 索引中的 Mods 移动到 unusedmods 并改名为 .zipmod_");
             OrganizeConfirmationRequested?.Invoke(this,
                 $"整理 Mods 将把：{string.Join("，", segments)}" +
                 $"（基于 {scanTime:yyyy-MM-dd HH:mm} 的分析结果，如手动增删过 Mod 请先重新分析）。是否继续？");
@@ -574,7 +612,7 @@ public partial class ModsWindowViewModel : ObservableObject
         _pendingEntries = null;
 
         IsOrganizing = true;
-        var (dupMoved, unlistedMoved, siteMoved, failed) = (0, 0, 0, 0);
+        var (dupMoved, activeUnlistedMoved, disabledMoved, siteMoved, failed) = (0, 0, 0, 0, 0);
         var failedMods = new List<ModInfo>();
         try
         {
@@ -583,7 +621,7 @@ public partial class ModsWindowViewModel : ObservableObject
                 // 移动成功统一改写 Path（与 plan.Winners 同一引用），供 LocalMods 按最终落点写回
                 foreach (var move in plan.Duplicates)
                 {
-                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
+                    if (TryOrganizeMove(move.Mod, move.TargetDir, move.TargetFileName) is { } newPath)
                     {
                         move.Mod.Path = newPath;
                         dupMoved++;
@@ -596,10 +634,14 @@ public partial class ModsWindowViewModel : ObservableObject
                 }
                 foreach (var move in plan.Unlisted)
                 {
-                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
+                    if (TryOrganizeMove(move.Mod, move.TargetDir, move.TargetFileName) is { } newPath)
                     {
                         move.Mod.Path = newPath;
-                        unlistedMoved++;
+                        if (string.Equals(Path.GetExtension(newPath), ModOrganizeHelper.DisabledZipmodExtension,
+                                StringComparison.OrdinalIgnoreCase))
+                            disabledMoved++;
+                        else
+                            activeUnlistedMoved++;
                     }
                     else
                     {
@@ -609,7 +651,7 @@ public partial class ModsWindowViewModel : ObservableObject
                 }
                 foreach (var move in plan.SitePlaced)
                 {
-                    if (TryOrganizeMove(move.Mod, move.TargetDir) is { } newPath)
+                    if (TryOrganizeMove(move.Mod, move.TargetDir, move.TargetFileName) is { } newPath)
                     {
                         move.Mod.Path = newPath;
                         siteMoved++;
@@ -652,8 +694,10 @@ public partial class ModsWindowViewModel : ObservableObject
             var parts = new List<string>();
             if (dupMoved > 0)
                 parts.Add($"去重 {dupMoved}");
-            if (unlistedMoved > 0)
-                parts.Add($"非 Sideload {unlistedMoved}");
+            if (activeUnlistedMoved > 0)
+                parts.Add($"非 Sideload 保留 {activeUnlistedMoved}");
+            if (disabledMoved > 0)
+                parts.Add($"非 Sideload 禁用 {disabledMoved}");
             if (siteMoved > 0)
                 parts.Add($"站点归位 {siteMoved}");
             var summary = $"整理完成：{string.Join("、", parts)}";
@@ -667,8 +711,8 @@ public partial class ModsWindowViewModel : ObservableObject
         }
     }
 
-    /// <summary>逐文件移动（防重名）；缓存时点后文件消失或移动失败记日志返回 null 不中断</summary>
-    private string? TryOrganizeMove(ModInfo mod, string targetDir)
+    /// <summary>逐文件移动/改名（防重名）；缓存时点后文件消失或移动失败记日志返回 null 不中断</summary>
+    private string? TryOrganizeMove(ModInfo mod, string targetDir, string? targetFileName)
     {
         // 存在性校验：分析缓存时点之后文件可能已被手动移走/删除
         if (!File.Exists(mod.Path))
@@ -678,7 +722,7 @@ public partial class ModsWindowViewModel : ObservableObject
         }
         try
         {
-            var target = ScannerService.UniqueTargetPath(targetDir, mod.Path);
+            var target = ScannerService.UniqueTargetPath(targetDir, mod.Path, targetFileName);
             _scanner.MoveFile(mod.Path, target);
             return target;
         }

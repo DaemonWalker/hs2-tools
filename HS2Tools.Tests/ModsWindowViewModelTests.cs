@@ -108,6 +108,107 @@ public class ModsWindowViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Filter_DuplicateGuidsOnly_UsesAllAnalysisEntries()
+    {
+        var gameDir = MakeGameDir();
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
+        var unusedDir = Path.Combine(gameDir, "unusedmods");
+        string ModPath(string name) => Path.Combine(modsDir, name);
+        ModScanEntry Entry(string guid, string path) => new()
+        {
+            Guid = guid,
+            Info = new ModInfo { Name = "Same Name", Path = path },
+        };
+
+        using var config = new ConfigService(_dir);
+        config.Update(s =>
+        {
+            s.Current.GamePath = gameDir;
+            s.Current.LastAnalysisTime = DateTime.Now;
+            foreach (var guid in new[] { "com.example.hair", "com.example.clothes", "com.exact", "com.unique" })
+                s.Current.LocalMods[guid] = new ModInfo { Name = "Same Name", Path = ModPath($"{guid}.zipmod") };
+            s.Current.ModEntries =
+            [
+                Entry(" com.example.hair ", ModPath("hair-a.zipmod")), // 仅 Trim 后相同
+                Entry("com.example.hair", ModPath("hair-b.zipmod")),
+                Entry("COM.EXAMPLE.HAIR", ModPath("hair-c.zipmod")), // Trim 并忽略大小写后相同
+                Entry(" com.example.clothes", ModPath("clothes-a.zipmod")),
+                Entry("COM.EXAMPLE.CLOTHES ", ModPath("clothes-b.zipmod")),
+                Entry("com.exact", ModPath("exact-a.zipmod")), // 完全相同的 GUID 也保留全部文件
+                Entry("com.exact", ModPath("exact-b.zipmod")),
+                Entry("com.unique", ModPath("unique.zipmod")), // 名称相同但 GUID 唯一，不误报
+                Entry("", ModPath("empty-a.zipmod")),
+                Entry(" ", ModPath("empty-b.zipmod")),
+                Entry("com.unused", Path.Combine(unusedDir, "unused-a.zipmod")),
+                Entry("COM.UNUSED", Path.Combine(unusedDir, "unused-b.zipmod")),
+            ];
+        });
+        var vm = MakeVm(config);
+
+        vm.ShowDuplicateGuidsOnly = true;
+
+        var expected = new[]
+        {
+            " com.example.hair ", "com.example.hair", "COM.EXAMPLE.HAIR",
+            " com.example.clothes", "COM.EXAMPLE.CLOTHES ", "com.exact", "com.exact",
+        };
+        Assert.Equal(expected.OrderBy(g => g, StringComparer.Ordinal),
+            vm.Mods.Select(m => m.Guid).OrderBy(g => g, StringComparer.Ordinal).ToArray());
+        Assert.All(vm.Mods, m => Assert.StartsWith(modsDir, m.Path, StringComparison.OrdinalIgnoreCase));
+
+        vm.SearchText = "clothes";
+        Assert.Equal(2, vm.Mods.Count);
+
+        vm.ShowDuplicateGuidsOnly = false;
+        Assert.Single(vm.Mods); // 普通列表仍使用折叠后的 LocalMods，并保留搜索条件
+    }
+
+    [Fact]
+    public void Filter_DuplicateGuidsOnly_WithoutAnalysis_ShowsHint()
+    {
+        using var config = new ConfigService(_dir);
+        config.Update(s =>
+        {
+            s.Current.LocalMods[" guid "] = new ModInfo { Name = "One" };
+            s.Current.LocalMods["GUID"] = new ModInfo { Name = "Two" };
+        });
+        var vm = MakeVm(config);
+
+        vm.ShowDuplicateGuidsOnly = true;
+
+        Assert.True(vm.IsEmpty);
+        Assert.Equal("请先在首页运行「开始分析」以检测 GUID 冲突", vm.EmptyText);
+    }
+
+    [Fact]
+    public void Filter_DuplicateGuidsOnly_NoMatches_ShowsHint()
+    {
+        var gameDir = MakeGameDir();
+        var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
+        using var config = new ConfigService(_dir);
+        config.Update(s =>
+        {
+            s.Current.GamePath = gameDir;
+            s.Current.LastAnalysisTime = DateTime.Now;
+            s.Current.LocalMods["g1"] = new ModInfo { Name = "Same Name" };
+            s.Current.LocalMods["g2"] = new ModInfo { Name = "Same Name" };
+            s.Current.ModEntries =
+            [
+                new ModScanEntry { Guid = "g1", Info = new ModInfo { Path = Path.Combine(modsDir, "a.zipmod") } },
+                new ModScanEntry { Guid = "g2", Info = new ModInfo { Path = Path.Combine(modsDir, "b.zipmod") } },
+                new ModScanEntry { Guid = "", Info = new ModInfo { Path = Path.Combine(modsDir, "c.zipmod") } },
+                new ModScanEntry { Guid = " ", Info = new ModInfo { Path = Path.Combine(modsDir, "d.zipmod") } },
+            ];
+        });
+        var vm = MakeVm(config);
+
+        vm.ShowDuplicateGuidsOnly = true;
+
+        Assert.True(vm.IsEmpty);
+        Assert.Equal("没有发现可能重复的 GUID", vm.EmptyText);
+    }
+
+    [Fact]
     public void Search_MatchesGuidNamePathAndSideloadUrl()
     {
         using var config = new ConfigService(_dir);

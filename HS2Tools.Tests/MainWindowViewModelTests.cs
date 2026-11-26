@@ -480,13 +480,51 @@ public class MainWindowViewModelTests : IDisposable
 
         var (moved, failed) = await vm.ConfirmMoveBackAsync();
         Assert.Equal((1, 0), (moved, failed));
-        Assert.True(File.Exists(Path.Combine(gameDir, "mods", "moved.zipmod")));
+        Assert.True(File.Exists(Path.Combine(gameDir, "mods", "MyMods", "moved.zipmod")));
         Assert.True(config.Settings.Current.LocalMods.ContainsKey("g-moved"));
         Assert.Equal("Moved", config.Settings.Current.LocalMods["g-moved"].Name);
         Assert.Equal(2, vm.UnusedModCount);
         // 未引用与同 GUID 重复的原地不动
         Assert.True(File.Exists(Path.Combine(unusedDir, "keep.zipmod")));
         Assert.True(File.Exists(Path.Combine(unusedDir, "dup2.zipmod")));
+    }
+
+    [Fact]
+    public async Task Scan_DisabledUnusedMod_WhenReferenced_RestoresZipmodInMyMods()
+    {
+        var gameDir = MakeGameDir();
+        var unusedDir = Path.Combine(gameDir, "unusedmods");
+        Directory.CreateDirectory(unusedDir);
+        var disabledPath = TestAssets.WriteZipmod(unusedDir, "moved.zipmod_",
+            TestAssets.MakeManifest("g-moved", "Moved"));
+        TestAssets.WritePng(Path.Combine(gameDir, GameProfiles.Hs2.CharaDirRelative), "c1.png",
+            TestAssets.PngPrefix(), TestAssets.ModMarker("g-moved"));
+
+        using var config = new ConfigService(_dir);
+        var vm = MakeVm(config, new SideloadDatabaseService(config));
+        vm.GamePath = gameDir;
+        string? confirmMsg = null;
+        vm.MoveBackConfirmationRequested += (_, msg) => confirmMsg = msg;
+
+        await vm.ScanCommand.ExecuteAsync(null);
+
+        Assert.True(vm.ScanCompleted);
+        Assert.Equal(1, vm.UnusedModCount);
+        Assert.NotNull(confirmMsg);
+        Assert.Contains("MyMods", confirmMsg);
+        Assert.Contains(".zipmod", confirmMsg);
+        Assert.True(File.Exists(disabledPath));
+        Assert.Single(config.Settings.Current.ModEntries);
+
+        var (moved, failed) = await vm.ConfirmMoveBackAsync();
+
+        Assert.Equal((1, 0), (moved, failed));
+        var restoredPath = Path.Combine(gameDir, "mods", "MyMods", "moved.zipmod");
+        Assert.True(File.Exists(restoredPath));
+        Assert.False(File.Exists(disabledPath));
+        Assert.Equal(restoredPath, config.Settings.Current.LocalMods["g-moved"].Path);
+        Assert.Equal(restoredPath, config.Settings.Current.ModEntries.Single(e => e.Guid == "g-moved").Info.Path);
+        Assert.Equal(0, vm.UnusedModCount);
     }
 
     [Fact]
@@ -520,7 +558,7 @@ public class MainWindowViewModelTests : IDisposable
 
         var (moved, failed) = await vm.ConfirmMoveBackAsync();
         Assert.Equal((1, 0), (moved, failed));
-        Assert.True(File.Exists(Path.Combine(gameDir, "mods", "shader.zipmod")));
+        Assert.True(File.Exists(Path.Combine(gameDir, "mods", "MyMods", "shader.zipmod")));
         Assert.True(config.Settings.Current.LocalMods.ContainsKey("g-shader"));
         Assert.True(File.Exists(Path.Combine(unusedDir, "keep.zipmod"))); // 普通未引用 mod 原地不动
     }

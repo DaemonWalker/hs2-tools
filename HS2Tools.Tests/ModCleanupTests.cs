@@ -144,6 +144,33 @@ public class ModCleanupTests : IDisposable
     }
 
     [Fact]
+    public async Task Cleanup_NeverDeletesDisabledUnlistedMod()
+    {
+        var gameDir = MakeGameDir();
+        var disabledPath = WriteMod(Path.Combine(gameDir, "unusedmods", "local-only.zipmod_"));
+        using var config = new ConfigService(_dir);
+        config.Update(s =>
+        {
+            s.Current.GamePath = gameDir;
+            s.Current.LastAnalysisTime = DateTime.Now;
+            s.Current.ModEntries = [Entry("g-local-only", disabledPath)];
+        });
+        var vm = new ModsWindowViewModel(config, new ScannerService(), new SideloadDatabaseService(config));
+        string? confirmation = null;
+        string? message = null;
+        vm.CleanupConfirmationRequested += (_, text) => confirmation = text;
+        vm.CleanupMessageRequested += (_, text) => message = text;
+
+        await vm.CleanupCommand.ExecuteAsync(null);
+        await vm.ConfirmCleanupAsync();
+
+        Assert.Null(confirmation);
+        Assert.Equal("没有符合清理条件的 Mods", message);
+        Assert.True(File.Exists(disabledPath));
+        Assert.Single(config.Settings.Current.ModEntries);
+    }
+
+    [Fact]
     public async Task Cleanup_RequiresCompletedAnalysis()
     {
         var gameDir = MakeGameDir();

@@ -2,19 +2,20 @@ using HS2Tools.Models;
 
 namespace HS2Tools.Services;
 
-/// <summary>一次整理移动：源 mod（Mod.Path 为现状路径）与目标目录</summary>
-public sealed record ModMove(ModInfo Mod, string TargetDir);
+/// <summary>一次整理移动：源 mod（Mod.Path 为现状路径）、目标目录与可选目标文件名</summary>
+public sealed record ModMove(ModInfo Mod, string TargetDir, string? TargetFileName = null);
 
 /// <summary>
 /// 整理 Mods 计划：同 GUID 跨 mods/unusedmods 两目录先去重（落选 → Duplicates），
-/// 再对赢家按站点索引分类：在索引中 → mods/&lt;站点目录&gt;/；不在索引中 → mods/MyMods。
+/// 再对赢家按站点索引与使用状态分类：在索引中 → mods/&lt;站点目录&gt;/；
+/// 不在索引中且在用 → mods/MyMods；不在索引中且未使用 → unusedmods 并禁用为 .zipmod_。
 /// </summary>
 public sealed class ModOrganizePlan
 {
     /// <summary>去重落选文件（→ duplicatemods）</summary>
     public required List<ModMove> Duplicates { get; init; }
 
-    /// <summary>不在 Sideload 索引中的赢家（→ mods/MyMods）</summary>
+    /// <summary>不在 Sideload 索引中的赢家（在用 → mods/MyMods；未使用 → unusedmods/.zipmod_）</summary>
     public required List<ModMove> Unlisted { get; init; }
 
     /// <summary>在 Sideload 索引中的赢家（→ mods/&lt;站点目录&gt;/）</summary>
@@ -31,20 +32,24 @@ public sealed class ModOrganizePlan
 public static class ModOrganizeHelper
 {
     public const string CustomModsDirectoryName = "MyMods";
+    public const string ZipmodExtension = ".zipmod";
+    public const string DisabledZipmodExtension = ".zipmod_";
 
     /// <summary>
-    /// 由全部 zipmod 条目（mods + unusedmods 两处扫描结果，含重复 GUID）与站点索引生成整理计划。
+    /// 由全部 zipmod 条目（mods + unusedmods 两处扫描结果，含重复 GUID）、站点索引与引用集合生成整理计划。
     /// 分组/裁决复刻 ModsWindowViewModel.DedupAsync：同 GUID 按
     /// <see cref="ScannerService.CompareModsForKeep"/>（版本高 → 体积大 → 日期新）取最优。
-    /// 不再按卡片引用、shader 或场景用途分类。
+    /// 未收录 Mod 中，被卡片引用或声明 shader 的保留在 MyMods，其余移入 unusedmods 并禁用。
     /// </summary>
     public static ModOrganizePlan BuildPlan(
         IReadOnlyList<KeyValuePair<string, ModInfo>> entries,
         IReadOnlyDictionary<string, string> siteIndex,
+        IReadOnlySet<string> usedGuids,
         string gamePath,
         string modsDir)
     {
         var dupDir = Path.Combine(gamePath, "duplicatemods");
+        var unusedDir = Path.Combine(gamePath, "unusedmods");
         var customModsDir = Path.Combine(modsDir, CustomModsDirectoryName);
         var index = new Dictionary<string, string>(siteIndex.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var (guid, url) in siteIndex)
@@ -74,14 +79,18 @@ public static class ModOrganizeHelper
         foreach (var (guid, info) in winners)
         {
             var siteDir = GetSiteTargetDir(index, guid, modsDir);
-            var targetDir = siteDir ?? customModsDir;
-            if (IsInDir(info.Path, targetDir))
+            var isUsed = usedGuids.Contains(guid) || info.ShaderNames.Count > 0;
+            var disabled = siteDir is null && !isUsed;
+            var targetDir = siteDir ?? (disabled ? unusedDir : customModsDir);
+            var targetFileName = GetTargetFileName(info.Path, disabled);
+            if (IsInDir(info.Path, targetDir) &&
+                string.Equals(Path.GetFileName(info.Path), targetFileName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             if (siteDir is null)
-                unlisted.Add(new ModMove(info, targetDir));
+                unlisted.Add(new ModMove(info, targetDir, targetFileName));
             else
-                sitePlaced.Add(new ModMove(info, targetDir));
+                sitePlaced.Add(new ModMove(info, targetDir, targetFileName));
         }
 
         return new ModOrganizePlan
@@ -110,6 +119,17 @@ public static class ModOrganizeHelper
         }
         var dirPart = Path.GetDirectoryName(rel);
         return string.IsNullOrEmpty(dirPart) ? modsDir : Path.Combine(modsDir, dirPart);
+    }
+
+    /// <summary>按启用/禁用状态生成目标文件名；其他扩展名保持原名</summary>
+    public static string GetTargetFileName(string path, bool disabled)
+    {
+        var name = Path.GetFileName(path);
+        if (disabled && name.EndsWith(ZipmodExtension, StringComparison.OrdinalIgnoreCase))
+            return name[..^ZipmodExtension.Length] + DisabledZipmodExtension;
+        if (!disabled && name.EndsWith(DisabledZipmodExtension, StringComparison.OrdinalIgnoreCase))
+            return name[..^DisabledZipmodExtension.Length] + ZipmodExtension;
+        return name;
     }
 
     /// <summary>路径的直接父目录是否就是指定目录（大小写不敏感）</summary>

@@ -58,7 +58,7 @@ public partial class MainWindow : Window
         vm.MoveBackConfirmationRequested += async (_, msg) =>
         {
             var result = MessageBox.Show(this, msg,
-                "移回 unusedmods 中被引用的 Mod？", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                "恢复 unusedmods 中正在使用的 Mod？", MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (result != MessageBoxResult.Yes)
                 return;
             var (moved, failed) = await vm.ConfirmMoveBackAsync();

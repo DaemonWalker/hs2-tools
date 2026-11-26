@@ -341,7 +341,7 @@ public partial class MainWindowViewModel : ObservableObject
 
             if (_pendingMoveBack.Count > 0)
                 MoveBackConfirmationRequested?.Invoke(this,
-                    $"发现 {_pendingMoveBack.Count} 个被角色/场景卡引用或包含 shader 的 Mod 在 unusedmods 中。\n\n是否移回 mods 目录？");
+                    $"发现 {_pendingMoveBack.Count} 个被角色/场景卡引用或包含 shader 的 Mod 在 unusedmods 中。\n\n是否移回 mods\\{ModOrganizeHelper.CustomModsDirectoryName} 并恢复为 .zipmod？");
             if (_pendingCardGuidRepairs.Count > 0)
                 CardGuidRepairConfirmationRequested?.Invoke(this, _pendingCardGuidRepairs.ToArray());
         }
@@ -357,7 +357,7 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 阶段 1：扫描 mods 目录全部 zipmod 并解析 manifest；unusedDir（unusedmods）存在时一并扫描。
+    /// 阶段 1：扫描 mods 目录全部 .zipmod；unusedDir（unusedmods）存在时一并扫描 .zipmod 与已禁用的 .zipmod_。
     /// 折叠后的 mods/unusedMods 供统计与移回候选（unusedMods 不进 LocalMods）；
     /// 完整条目列表（含重复 guid，与两字典共享 ModInfo 引用）持久化为去重/整理/清理的缓存数据源。
     /// </summary>
@@ -366,7 +366,14 @@ public partial class MainWindowViewModel : ObservableObject
     {
         var files = _scanner.ScanDirectory(modsDir, new ScanOptions { TargetExtension = { ".zipmod" } });
         var unusedFiles = unusedDir is not null && Directory.Exists(unusedDir)
-            ? _scanner.ScanDirectory(unusedDir, new ScanOptions { TargetExtension = { ".zipmod" } })
+            ? _scanner.ScanDirectory(unusedDir, new ScanOptions
+            {
+                TargetExtension =
+                {
+                    ModOrganizeHelper.ZipmodExtension,
+                    ModOrganizeHelper.DisabledZipmodExtension,
+                },
+            })
             : new List<string>();
         var total = files.Count + unusedFiles.Count;
         ModScanProgress = $"0/{total}";
@@ -442,8 +449,9 @@ public partial class MainWindowViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 移回（执行阶段）：unusedmods 中被引用的 mod 平移回 mods 根目录（同名追加 _2/_3 后缀），
-    /// 成功者补录进 LocalMods（Changed 事件驱动统计/缺失数刷新）。单文件失败记日志不中断。
+    /// 移回（执行阶段）：unusedmods 中被引用或含 shader 的 mod 移入 mods/MyMods，
+    /// .zipmod_ 同时恢复为 .zipmod（同名追加 _2/_3 后缀）；成功者补录进 LocalMods。
+    /// 单文件失败记日志不中断。
     /// </summary>
     public async Task<(int Moved, int Failed)> ConfirmMoveBackAsync()
     {
@@ -455,6 +463,7 @@ public partial class MainWindowViewModel : ObservableObject
         if (modsDir is null)
             return (0, pending.Count);
 
+        var targetDir = Path.Combine(modsDir, ModOrganizeHelper.CustomModsDirectoryName);
         var movedPairs = new List<(string Guid, ModInfo Info)>();
         var failed = 0;
         await Task.Run(() =>
@@ -463,7 +472,8 @@ public partial class MainWindowViewModel : ObservableObject
             {
                 try
                 {
-                    var target = ScannerService.UniqueTargetPath(modsDir, info.Path);
+                    var targetFileName = ModOrganizeHelper.GetTargetFileName(info.Path, disabled: false);
+                    var target = ScannerService.UniqueTargetPath(targetDir, info.Path, targetFileName);
                     _scanner.MoveFile(info.Path, target);
                     info.Path = target;
                     movedPairs.Add((guid, info));

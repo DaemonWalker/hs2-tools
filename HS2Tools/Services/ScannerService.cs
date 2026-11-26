@@ -823,10 +823,10 @@ public class ScannerService
         File.Move(src, dst);
     }
 
-    /// <summary>目录内不冲突的目标路径：同名已存在时追加 _2、_3 后缀</summary>
-    internal static string UniqueTargetPath(string dir, string srcPath)
+    /// <summary>目录内不冲突的目标路径：同名已存在时追加 _2、_3 后缀；可同时指定改名后的文件名</summary>
+    internal static string UniqueTargetPath(string dir, string srcPath, string? targetFileName = null)
     {
-        var name = Path.GetFileName(srcPath);
+        var name = targetFileName ?? Path.GetFileName(srcPath);
         var target = Path.Combine(dir, name);
         if (!File.Exists(target))
             return target;

@@ -38,20 +38,47 @@ public class ModOrganizeTests : IDisposable
 
     private static ModOrganizePlan Plan(
         IReadOnlyList<KeyValuePair<string, ModInfo>> entries,
-        IReadOnlyDictionary<string, string>? siteIndex = null) =>
+        IReadOnlyDictionary<string, string>? siteIndex = null,
+        IEnumerable<string>? usedGuids = null) =>
         ModOrganizeHelper.BuildPlan(entries,
-            siteIndex ?? new Dictionary<string, string>(), GamePath, ModsDir);
+            siteIndex ?? new Dictionary<string, string>(),
+            new HashSet<string>(usedGuids ?? [], StringComparer.OrdinalIgnoreCase), GamePath, ModsDir);
 
     [Fact]
-    public void BuildPlan_NotInIndex_MovesToMyMods()
+    public void BuildPlan_UnusedNotInIndex_MovesToUnusedmodsAndDisables()
     {
         var plan = Plan([Entry("g-a")]);
 
         var move = Assert.Single(plan.Unlisted);
-        Assert.Equal(MyModsDir, move.TargetDir);
+        Assert.Equal(UnusedDir, move.TargetDir);
+        Assert.Equal("g-a.zipmod_", move.TargetFileName);
         Assert.Empty(plan.SitePlaced);
         Assert.Empty(plan.Duplicates);
         Assert.Single(plan.Winners);
+    }
+
+    [Fact]
+    public void BuildPlan_UsedNotInIndex_MovesToMyMods()
+    {
+        var plan = Plan([Entry("g-a")], usedGuids: ["G-A"]);
+
+        var move = Assert.Single(plan.Unlisted);
+        Assert.Equal(MyModsDir, move.TargetDir);
+        Assert.Equal("g-a.zipmod", move.TargetFileName);
+        Assert.Empty(plan.SitePlaced);
+    }
+
+    [Fact]
+    public void BuildPlan_ShaderNotInIndex_MovesToMyMods()
+    {
+        var entry = Entry("g-shader");
+        entry.Value.ShaderNames.Add("Standard");
+
+        var plan = Plan([entry]);
+
+        var move = Assert.Single(plan.Unlisted);
+        Assert.Equal(MyModsDir, move.TargetDir);
+        Assert.Equal("g-shader.zipmod", move.TargetFileName);
     }
 
     [Fact]
@@ -113,9 +140,9 @@ public class ModOrganizeTests : IDisposable
     }
 
     [Fact]
-    public void BuildPlan_UnlistedInMyMods_StaysPut()
+    public void BuildPlan_UsedUnlistedInMyMods_StaysPut()
     {
-        var plan = Plan([Entry("g-u", path: $@"{MyModsDir}\u.zipmod")]);
+        var plan = Plan([Entry("g-u", path: $@"{MyModsDir}\u.zipmod")], usedGuids: ["g-u"]);
 
         Assert.Empty(plan.Unlisted);
         Assert.Empty(plan.SitePlaced);
@@ -123,7 +150,37 @@ public class ModOrganizeTests : IDisposable
     }
 
     [Fact]
-    public void BuildPlan_InUnusedmods_MovesBySideloadMembership()
+    public void BuildPlan_UnusedUnlistedInMyMods_MovesToUnusedmods()
+    {
+        var plan = Plan([Entry("g-u", path: $@"{MyModsDir}\u.zipmod")]);
+
+        var move = Assert.Single(plan.Unlisted);
+        Assert.Equal(UnusedDir, move.TargetDir);
+        Assert.Equal("u.zipmod_", move.TargetFileName);
+    }
+
+    [Fact]
+    public void BuildPlan_DisabledUnusedInUnusedmods_StaysPut()
+    {
+        var plan = Plan([Entry("g-u", path: $@"{UnusedDir}\u.zipmod_")]);
+
+        Assert.Empty(plan.Unlisted);
+        Assert.Empty(plan.SitePlaced);
+        Assert.Single(plan.Winners);
+    }
+
+    [Fact]
+    public void BuildPlan_UsedDisabledInUnusedmods_RestoresInMyMods()
+    {
+        var plan = Plan([Entry("g-u", path: $@"{UnusedDir}\u.zipmod_")], usedGuids: ["g-u"]);
+
+        var move = Assert.Single(plan.Unlisted);
+        Assert.Equal(MyModsDir, move.TargetDir);
+        Assert.Equal("u.zipmod", move.TargetFileName);
+    }
+
+    [Fact]
+    public void BuildPlan_InUnusedmods_MovesBySideloadMembershipAndUsage()
     {
         var index = new Dictionary<string, string> { ["g-u"] = "Exclusive HS2/u.zipmod" };
         var plan = Plan(
@@ -132,9 +189,11 @@ public class ModOrganizeTests : IDisposable
         var siteMove = Assert.Single(plan.SitePlaced);
         Assert.Equal("g-u", siteMove.Mod.Name);
         Assert.Equal(Path.Combine(ModsDir, "Exclusive HS2"), siteMove.TargetDir);
+        Assert.Equal("u.zipmod", siteMove.TargetFileName);
         var unlistedMove = Assert.Single(plan.Unlisted);
         Assert.Equal("g-w", unlistedMove.Mod.Name);
-        Assert.Equal(MyModsDir, unlistedMove.TargetDir);
+        Assert.Equal(UnusedDir, unlistedMove.TargetDir);
+        Assert.Equal("w.zipmod_", unlistedMove.TargetFileName);
     }
 
     [Fact]
@@ -170,7 +229,11 @@ public class ModOrganizeTests : IDisposable
 
         Assert.Empty(plan.SitePlaced);
         Assert.Equal(3, plan.Unlisted.Count);
-        Assert.All(plan.Unlisted, move => Assert.Equal(MyModsDir, move.TargetDir));
+        Assert.All(plan.Unlisted, move =>
+        {
+            Assert.Equal(UnusedDir, move.TargetDir);
+            Assert.EndsWith(".zipmod_", move.TargetFileName);
+        });
     }
 
     [Fact]
@@ -250,9 +313,10 @@ public class ModOrganizeTests : IDisposable
         Assert.NotNull(confirmMsg);
         Assert.Contains("duplicatemods", confirmMsg);
         Assert.Contains("3 个 Sideload Mods", confirmMsg);
-        Assert.Contains("1 个不在 Sideload 索引中", confirmMsg);
-        Assert.Contains("MyMods", confirmMsg);
-        Assert.DoesNotContain("unusedmods", confirmMsg);
+        Assert.Contains("1 个未使用且不在 Sideload 索引中", confirmMsg);
+        Assert.Contains("unusedmods", confirmMsg);
+        Assert.Contains(".zipmod_", confirmMsg);
+        Assert.DoesNotContain("MyMods", confirmMsg);
         Assert.DoesNotContain("scenemods", confirmMsg);
 
         await vm.ConfirmOrganizeAsync();
@@ -260,7 +324,7 @@ public class ModOrganizeTests : IDisposable
         var siteA = Path.Combine(modsDir, "Exclusive HS2", "a.zipmod");
         var siteB = Path.Combine(modsDir, "Studio", "b.zipmod");
         var siteD = Path.Combine(modsDir, "Exclusive HS2", "d_v2.zipmod");
-        var unlistedC = Path.Combine(modsDir, ModOrganizeHelper.CustomModsDirectoryName, "c.zipmod");
+        var unlistedC = Path.Combine(gameDir, "unusedmods", "c.zipmod_");
         Assert.True(File.Exists(Path.Combine(gameDir, "duplicatemods", "d_v1.zipmod")));
         Assert.True(File.Exists(siteA));
         Assert.True(File.Exists(siteB));
@@ -273,21 +337,22 @@ public class ModOrganizeTests : IDisposable
         Assert.False(File.Exists(pathD2));
 
         var localMods = config.Settings.Current.LocalMods;
-        Assert.Equal(4, localMods.Count);
+        Assert.Equal(3, localMods.Count);
         Assert.Equal(siteA, localMods["g-a"].Path);
         Assert.Equal(siteB, localMods["g-b"].Path);
-        Assert.Equal(unlistedC, localMods["g-c"].Path);
+        Assert.False(localMods.ContainsKey("g-c"));
         Assert.Equal(siteD, localMods["g-d"].Path);
         Assert.Equal(4, config.Settings.Current.ModEntries.Count);
+        Assert.Equal(unlistedC, config.Settings.Current.ModEntries.Single(e => e.Guid == "g-c").Info.Path);
 
         Assert.Contains(messages, m => m.Contains("整理完成") && m.Contains("去重 1") &&
-            m.Contains("非 Sideload 1") && m.Contains("站点归位 3"));
+            m.Contains("非 Sideload 禁用 1") && m.Contains("站点归位 3"));
         Assert.False(vm.IsOrganizing);
         Assert.Equal("整理 Mods", vm.OrganizeButtonText);
     }
 
     [Fact]
-    public async Task Organize_Unusedmods_MovesAllWinnersIntoMods()
+    public async Task Organize_Unusedmods_RestoresIndexedAndRenamesUnusedUnlisted()
     {
         var gameDir = MakeGameDir();
         var modsDir = Path.Combine(gameDir, GameProfiles.Hs2.ModsDirRelative);
@@ -313,16 +378,16 @@ public class ModOrganizeTests : IDisposable
         await vm.ConfirmOrganizeAsync();
 
         var siteU = Path.Combine(modsDir, "Exclusive HS2", "u.zipmod");
-        var unlistedW = Path.Combine(modsDir, ModOrganizeHelper.CustomModsDirectoryName, "w.zipmod");
+        var unlistedW = Path.Combine(unusedDir, "w.zipmod_");
         Assert.True(File.Exists(siteU));
         Assert.True(File.Exists(unlistedW));
         Assert.False(File.Exists(pathU));
         Assert.False(File.Exists(pathW));
 
         var localMods = config.Settings.Current.LocalMods;
-        Assert.Equal(2, localMods.Count);
+        Assert.Single(localMods);
         Assert.Equal(siteU, localMods["g-u"].Path);
-        Assert.Equal(unlistedW, localMods["g-w"].Path);
+        Assert.False(localMods.ContainsKey("g-w"));
     }
 
     [Fact]
@@ -351,12 +416,12 @@ public class ModOrganizeTests : IDisposable
         await vm.OrganizeCommand.ExecuteAsync(null);
         Assert.NotNull(confirmMsg);
         Assert.Contains("1 个 Sideload Mods", confirmMsg);
-        Assert.Contains("1 个不在 Sideload 索引中", confirmMsg);
+        Assert.Contains("1 个未使用且不在 Sideload 索引中", confirmMsg);
 
         await vm.ConfirmOrganizeAsync();
 
         Assert.True(File.Exists(Path.Combine(modsDir, "Studio", "s.zipmod")));
-        Assert.True(File.Exists(Path.Combine(modsDir, ModOrganizeHelper.CustomModsDirectoryName, "dl.zipmod")));
+        Assert.True(File.Exists(Path.Combine(gameDir, "unusedmods", "dl.zipmod_")));
         Assert.False(File.Exists(pathS));
         Assert.False(File.Exists(pathDl));
     }

@@ -52,6 +52,9 @@
                             <RadioButton Content="未使用" GroupName="ModFilter"
                                          IsChecked="{Binding ShowUnusedOnly, Mode=TwoWay}"
                                          Style="{StaticResource SegmentedRadioButton}"/>
+                            <RadioButton Content="GUID 可能重复" GroupName="ModFilter"
+                                         IsChecked="{Binding ShowDuplicateGuidsOnly, Mode=TwoWay}"
+                                         Style="{StaticResource SegmentedRadioButton}"/>
                         </StackPanel>
                     </Border>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
